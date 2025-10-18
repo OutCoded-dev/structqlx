@@ -4,10 +4,11 @@ pub trait DbModel<'a, T>: Sized {
     /// Return the table name for the model.
     fn table_name() -> String;
 
-    /// Return the schema for the model. Default is `nexus`.
+    #[cfg(feature = "postgres")]
+    /// Return a schema for the model. Default is `public`.
     #[inline]
     fn schema() -> &'static str {
-        "nexus"
+        "public"
     }
 
     /// Get a single row from the table.

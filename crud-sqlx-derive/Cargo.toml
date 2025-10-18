@@ -3,4 +3,21 @@ name = "crud-sqlx-derive"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+proc-macro = true
+
+[features]
+postgres = ["crud-sqlx/postgres"]
+
 [dependencies]
+crud-sqlx = {path = "../crud-sqlx"}
+
+convert_case = "*"
+darling = "0.20.10"
+proc-macro2 = "1.0.94"
+quote = "1.0.40"
+syn = "2.0.100"
+
+[dev-dependencies]
+sqlx = "0.8.6"
+time = "0.3.44"
