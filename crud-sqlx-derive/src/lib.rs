@@ -6,11 +6,24 @@ use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input};
 
-#[derive(FromMeta, Default)]
-#[darling(default)]
+#[derive(FromMeta)]
 struct CrudModelOptions {
+    #[darling(default)]
     table_name: Option<String>,
+    #[darling(default)]
     schema: Option<String>,
+    db: syn::Path,
+}
+
+#[cfg(feature = "sqlite")]
+impl Default for CrudModelOptions {
+    fn default() -> Self {
+        Self {
+            table_name: None,
+            schema: None,
+            db: syn::Path::from_expr(&syn::Expr::from_string("sqlx::Sqlite").unwrap()).unwrap(),
+        }
+    }
 }
 
 #[proc_macro_attribute]
@@ -42,6 +55,8 @@ pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
         quote! {}
     };
 
+    let db_type = args.db;
+
     let model_struct: DataStruct = match &input.data {
         Data::Struct(model_struct) => model_struct.clone(),
         _ => panic!("CrudModel can only be derived for structs."),
@@ -49,35 +64,44 @@ pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
 
     // ID related fields.
     let id_type = get_id_field_type(model_struct.clone());
-    let create_method = generate_create_method(model_struct.clone());
-    let update_method = generate_update_method(model_struct.clone());
-    let save_method = generate_save_method(model_struct.clone());
+    let create_method = generate_create_method(model_struct.clone(), &db_type);
+    let update_method = generate_update_method(model_struct.clone(), &db_type);
+    let save_method = generate_save_method(model_struct.clone(), &db_type);
 
     let getters = generate_getters(&model_struct);
 
+    let table_name = quote! {
+        /// Return the table name for the model.
+        fn table_name() -> String {
+            #table_name.to_string()
+        }
+    };
+
     quote! {
+        use sqlx::Executor;
+
         #[derive(Clone, Debug, sqlx::FromRow, PartialEq)]
         #input
 
         impl<'a> DbModel<'a, #id_type> for #ident {
+            type Db = #db_type;
+
             #schema
-            /// Return the table name for the model.
-            fn table_name() -> String {
-                format!("{}.{}", Self::schema(), #table_name)
-            }
+
+            #table_name
 
             /// Return a model by its id.
-            async fn get_one(executor: impl sqlx::PgExecutor<'a>, id: &#id_type) -> sqlx::Result<#ident> {
+            async fn get_one(executor: impl sqlx::Executor<'a, Database = Self::Db>, id: &#id_type) -> sqlx::Result<#ident> {
                 let query = format!("SELECT * FROM {} WHERE id = $1", Self::table_name());
-                sqlx::query_as::<Postgres, #ident>(&query)
+                sqlx::query_as::<#db_type, #ident>(&query)
                     .bind(id)
                     .fetch_one(executor)
                     .await
             }
 
             /// Return one or more rows matching `ids`.
-            async fn get_many(executor: impl sqlx::PgExecutor<'a>, ids: &[#id_type]) -> sqlx::Result<Vec<#ident>> {
-                let mut builder = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!("SELECT * FROM {} WHERE id IN (", Self::table_name()));
+            async fn get_many(executor: impl sqlx::Executor<'a, Database = Self::Db>, ids: &[#id_type]) -> sqlx::Result<Vec<#ident>> {
+                let mut builder = sqlx::QueryBuilder::<#db_type>::new(format!("SELECT * FROM {} WHERE id IN (", Self::table_name()));
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -89,16 +113,16 @@ pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             /// Return all records in the table.
-            async fn get_all(executor: impl sqlx::PgExecutor<'a>) -> sqlx::Result<Vec<#ident>> {
+            async fn get_all(executor: impl sqlx::Executor<'a, Database = Self::Db>) -> sqlx::Result<Vec<#ident>> {
                 let query = format!("SELECT * FROM {}", Self::table_name());
-                sqlx::query_as::<Postgres, #ident>(&query)
+                sqlx::query_as::<#db_type, #ident>(&query)
                     .fetch_all(executor)
                     .await
             }
 
             /// Delete one or more records from the table.
-            async fn delete_many(executor: impl sqlx::PgExecutor<'a>, ids: &[#id_type]) -> sqlx::Result<()> {
-                let mut builder = sqlx::QueryBuilder::<sqlx::Postgres>::new(format!("DELETE FROM {} WHERE id IN (", Self::table_name()));
+            async fn delete_many(executor: impl sqlx::Executor<'a, Database = Self::Db>, ids: &[#id_type]) -> sqlx::Result<()> {
+                let mut builder = sqlx::QueryBuilder::<#db_type>::new(format!("DELETE FROM {} WHERE id IN (", Self::table_name()));
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -110,9 +134,9 @@ pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             /// Delete exactly one record -- the current one.
-            async fn delete(&self, executor: impl sqlx::PgExecutor<'a>) -> sqlx::Result<()> {
+            async fn delete(&self, executor: impl sqlx::Executor<'a, Database = Self::Db>) -> sqlx::Result<()> {
                 let query = format!("DELETE FROM {} WHERE id = $1", Self::table_name());
-                sqlx::query::<sqlx::Postgres>(&query)
+                sqlx::query::<#db_type>(&query)
                     .bind(&self.id)
                     .execute(executor)
                     .await?;
@@ -120,7 +144,8 @@ pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
             }
 
             /// Return the count of rows in the table.
-            async fn count(executor: impl sqlx::PgExecutor<'a>) -> sqlx::Result<i64> {
+            async fn count(executor: impl sqlx::Executor<'a, Database = Self::Db>) -> sqlx::Result<i64> {
+                use sqlx::Row;
                 let query = format!("SELECT COUNT(*) FROM {}", Self::table_name());
                 let row = sqlx::query(&query)
                     .fetch_one(executor)
@@ -295,7 +320,10 @@ fn get_field_names(model_struct: DataStruct) -> Vec<String> {
     field_names
 }
 
-fn generate_create_method(model_struct: DataStruct) -> proc_macro2::TokenStream {
+fn generate_create_method(
+    model_struct: DataStruct,
+    db_type: &syn::Path,
+) -> proc_macro2::TokenStream {
     let field_names = get_field_names(model_struct.clone());
     let field_names_clause = field_names.join(", ");
     let values_clause = field_names
@@ -322,10 +350,10 @@ fn generate_create_method(model_struct: DataStruct) -> proc_macro2::TokenStream 
 
     quote! {
         /// Create a new record from the current data.
-        async fn create(&mut self, executor: impl sqlx::PgExecutor<'a>) -> sqlx::Result<Self> {
+        async fn create(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Db>) -> sqlx::Result<Self> {
             let table_name = Self::table_name();
             let query = format!(#query);
-            let mut query = sqlx::query_as::<sqlx::Postgres, Self>(&query);
+            let mut query = sqlx::query_as::<#db_type, Self>(&query);
             #(#bind_exprs);*
             ;
             let result = query.fetch_one(executor).await;
@@ -338,7 +366,10 @@ fn generate_create_method(model_struct: DataStruct) -> proc_macro2::TokenStream 
 }
 
 /// Build and return an update() method for a writeable struct.
-fn generate_update_method(model_struct: DataStruct) -> proc_macro2::TokenStream {
+fn generate_update_method(
+    model_struct: DataStruct,
+    db_type: &syn::Path,
+) -> proc_macro2::TokenStream {
     let field_names = get_field_names(model_struct.clone());
     let set_clause = field_names
         .iter()
@@ -359,10 +390,10 @@ fn generate_update_method(model_struct: DataStruct) -> proc_macro2::TokenStream 
         .collect::<Vec<syn::Expr>>();
     quote! {
         /// Update an existing record with the current data.
-        async fn update(&mut self, executor: impl sqlx::PgExecutor<'a>) -> sqlx::Result<()> {
+        async fn update(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Db>) -> sqlx::Result<()> {
             let table_name = Self::table_name();
             let query = format!(#query);
-            let mut query = sqlx::query_as::<sqlx::Postgres, Self>(&query);
+            let mut query = sqlx::query_as::<#db_type, Self>(&query);
             #(#bind_exprs);*
             ;
             query = query.bind(self.id.clone());
@@ -378,14 +409,14 @@ fn generate_update_method(model_struct: DataStruct) -> proc_macro2::TokenStream 
     }
 }
 
-fn generate_save_method(model_struct: DataStruct) -> proc_macro2::TokenStream {
+fn generate_save_method(model_struct: DataStruct, db_type: &syn::Path) -> proc_macro2::TokenStream {
     if is_option(&get_id_field_from_model(model_struct).ty) {
         quote! {
             /// Save t
             ///
             /// If the record has no ID, create a new record. Otherwise, update
             /// the existing one.
-            async fn save(&mut self, executor: impl sqlx::PgExecutor<'a>) -> sqlx::Result<()> {
+            async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Db>) -> sqlx::Result<()> {
                 if self.id.is_none() {
                     self.create(executor).await.map(|_| ())
                 } else {
@@ -398,9 +429,10 @@ fn generate_save_method(model_struct: DataStruct) -> proc_macro2::TokenStream {
             /// Save the record.
             ///
             /// If the record exists in the database, update it. Otherwise, create it.
-            async fn save(&mut self, executor: impl sqlx::PgExecutor<'a> + Copy) -> sqlx::Result<()> {
+            async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Db> + Copy) -> sqlx::Result<()> {
+                use sqlx::Row;
                 let query = format!("SELECT EXISTS (SELECT FROM {} WHERE id = $1) AS exists", Self::table_name());
-                let exists = sqlx::query::<sqlx::Postgres>(&query)
+                let exists = sqlx::query::<#db_type>(&query)
                     .bind(&self.id)
                     .fetch_one(executor)
                     .await?

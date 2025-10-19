@@ -63,3 +63,4 @@ tags
 .ionide
 
 # End of https://www.toptal.com/developers/gitignore/api/vim,rust,rust-analyzer,visualstudiocode
+Cargo.lock

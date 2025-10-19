@@ -7,17 +7,20 @@ edition = "2024"
 proc-macro = true
 
 [features]
+default = ["sqlite"]
+sqlite = ["crud-sqlx/sqlite"]
 postgres = ["crud-sqlx/postgres"]
 
 [dependencies]
+convert_case = "0.8.0"
 crud-sqlx = {path = "../crud-sqlx"}
+darling = "0.21.3"
 
-convert_case = "*"
-darling = "0.20.10"
-proc-macro2 = "1.0.94"
-quote = "1.0.40"
-syn = "2.0.100"
+proc-macro2 = "1.0.101"
+quote = "1.0.41"
+syn = "2.0.107"
 
 [dev-dependencies]
-sqlx = "0.8.6"
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
 time = "0.3.44"
+uuid = { version = "1.18.1", features = ["v4"] }

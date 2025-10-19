@@ -1,13 +1,12 @@
 use crud_sqlx::traits::DbModel;
 use crud_sqlx_derive::db_model;
-use sqlx::{Row, Sqlite};
-use uuid::Uuid;
 
 #[sqlx::test]
 fn model_with_non_optional_id() {
-    #[db_model]
+    #[allow(dead_code)]
+    #[db_model(db = sqlx::Sqlite)]
     struct MyStruct {
-        id: Uuid,
+        id: i32,
         name: String,
         created_at: String,
     }
@@ -15,7 +14,8 @@ fn model_with_non_optional_id() {
 
 #[test]
 fn model_with_optional_id() {
-    #[db_model(table_name = "some_other_table")]
+    #[allow(dead_code)]
+    #[db_model(db = sqlx::Sqlite, table_name = "some_other_table")]
     struct MyStruct {
         id: Option<i32>,
         name: String,
@@ -25,16 +25,19 @@ fn model_with_optional_id() {
 
 #[sqlx::test]
 async fn can_select_into_model(pool: sqlx::SqlitePool) {
-    #[db_model(table_name = "test_table")]
+    #[db_model(db = sqlx::Sqlite, table_name = "test_table")]
     struct TestUser {
-        id: Uuid,
-        created_at: Option<time::OffsetDateTime>,
+        id: i32,
+        name: String,
     }
-    sqlx::query!("CREATE TABLE IF NOT EXISTS test_schema.test_table (id UUID PRIMARY KEY, created_at TIMESTAMP WITH TIME ZONE DEFAULT now())").execute(&pool).await.unwrap();
+    sqlx::query("CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, name TEXT)")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     let mut user = TestUser {
-        id: Uuid::new_v4(),
-        created_at: None,
+        id: 1,
+        name: "Test User".to_string(),
     };
     let res = user.create(&pool).await;
     assert!(res.is_ok(), "{res:#?}");
