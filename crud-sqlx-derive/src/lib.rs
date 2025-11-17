@@ -14,16 +14,6 @@ struct CrudModelOptions {
     schema: Option<String>,
 }
 
-#[cfg(feature = "sqlite")]
-impl Default for CrudModelOptions {
-    fn default() -> Self {
-        Self {
-            table_name: None,
-            schema: None,
-        }
-    }
-}
-
 #[proc_macro_attribute]
 pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
     let attr_args = match NestedMeta::parse_meta_list(attr.clone().into()) {
@@ -429,12 +419,12 @@ fn generate_save_method(model_struct: DataStruct, db_type: &syn::Path) -> proc_m
             /// If the record exists in the database, update it. Otherwise, create it.
             async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Db> + Copy) -> sqlx::Result<()> {
                 use sqlx::Row;
-                let query = format!("SELECT EXISTS (SELECT FROM {} WHERE id = $1) AS exists", Self::table_name());
+                let query = format!("SELECT 1 AS row_exists FROM {} WHERE id = $1;", Self::table_name());
                 let exists = sqlx::query::<#db_type>(&query)
                     .bind(&self.id)
                     .fetch_one(executor)
-                    .await?
-                    .try_get("exists")?;
+                    .await
+                    .is_ok();
                 if exists {
                     self.update(executor).await.map(|_| ())
                 } else {
