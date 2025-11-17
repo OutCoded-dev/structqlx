@@ -12,7 +12,7 @@ sqlite = ["crud-sqlx/sqlite"]
 postgres = ["crud-sqlx/postgres"]
 
 [dependencies]
-convert_case = "0.8.0"
+convert_case = "0.9.0"
 crud-sqlx = {path = "../crud-sqlx"}
 darling = "0.21.3"
 

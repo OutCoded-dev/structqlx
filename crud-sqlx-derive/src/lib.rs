@@ -12,7 +12,6 @@ struct CrudModelOptions {
     table_name: Option<String>,
     #[darling(default)]
     schema: Option<String>,
-    db: syn::Path,
 }
 
 #[cfg(feature = "sqlite")]
@@ -21,7 +20,6 @@ impl Default for CrudModelOptions {
         Self {
             table_name: None,
             schema: None,
-            db: syn::Path::from_expr(&syn::Expr::from_string("sqlx::Sqlite").unwrap()).unwrap(),
         }
     }
 }
@@ -55,7 +53,7 @@ pub fn db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let db_type = args.db;
+    let db_type = syn::Path::from_string("sqlx::Sqlite").unwrap();
 
     let model_struct: DataStruct = match &input.data {
         Data::Struct(model_struct) => model_struct.clone(),

@@ -4,7 +4,7 @@ use crud_sqlx_derive::db_model;
 #[sqlx::test]
 fn model_with_non_optional_id() {
     #[allow(dead_code)]
-    #[db_model(db = sqlx::Sqlite)]
+    #[db_model]
     struct MyStruct {
         id: i32,
         name: String,
@@ -15,7 +15,7 @@ fn model_with_non_optional_id() {
 #[test]
 fn model_with_optional_id() {
     #[allow(dead_code)]
-    #[db_model(db = sqlx::Sqlite, table_name = "some_other_table")]
+    #[db_model]
     struct MyStruct {
         id: Option<i32>,
         name: String,
@@ -25,12 +25,12 @@ fn model_with_optional_id() {
 
 #[sqlx::test]
 async fn can_select_into_model(pool: sqlx::SqlitePool) {
-    #[db_model(db = sqlx::Sqlite, table_name = "test_table")]
+    #[db_model]
     struct TestUser {
         id: i32,
         name: String,
     }
-    sqlx::query("CREATE TABLE IF NOT EXISTS test_table (id INTEGER PRIMARY KEY, name TEXT)")
+    sqlx::query("CREATE TABLE IF NOT EXISTS test_user (id INTEGER PRIMARY KEY, name TEXT)")
         .execute(&pool)
         .await
         .unwrap();
