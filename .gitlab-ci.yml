@@ -5,14 +5,29 @@
 # Container Scanning customization: https://docs.gitlab.com/ee/user/application_security/container_scanning/#customizing-the-container-scanning-settings
 # Note that environment variables can be set in several places
 # See https://docs.gitlab.com/ee/ci/variables/#cicd-variable-precedence
+include:
+  - template: Jobs/SAST.gitlab-ci.yml
+  - template: Jobs/Secret-Detection.gitlab-ci.yml
+
 stages:
   - test
   - secret-detection
-sast:
-  stage: test
-include:
-  - template: Security/Secret-Detection.gitlab-ci.yml
+
 variables:
   SECRET_DETECTION_ENABLED: "true"
+
+sast:
+  stage: test
+
 secret_detection:
   stage: secret-detection
+
+test:
+  image: rust
+  script:
+    - cargo test --all-features
+
+lint:
+  image: rust
+  script:
+    - cargo clippy --all-targets --all-features
