@@ -1,4 +1,4 @@
-use crud_sqlx::traits::DbModel;
+use crud_sqlx::traits::DatabaseModel;
 use crud_sqlx_derive::db_model;
 
 #[sqlx::test]
@@ -39,7 +39,7 @@ async fn can_select_into_model(pool: sqlx::SqlitePool) {
         .await
         .unwrap();
 
-    let user = TestUser::get_one(&pool, &1).await.unwrap();
+    let user = TestUser::fetch_one(&pool, &1).await.unwrap();
     assert_eq!(user.id, 1);
     assert_eq!(user.name, "Test User");
 }
@@ -64,7 +64,7 @@ async fn can_insert_from_model_to_table(pool: sqlx::SqlitePool) {
     let res = user.create(&pool).await;
     assert!(res.is_ok(), "{res:#?}");
 
-    let user_2 = TestUser::get_one(&pool, &user.id).await.unwrap();
+    let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
     assert_eq!(user_2, user);
 }
 
@@ -89,7 +89,7 @@ async fn can_delete_rows(pool: sqlx::SqlitePool) {
     assert!(res.is_ok(), "{res:#?}");
 
     user.delete(&pool).await.unwrap();
-    match TestUser::get_one(&pool, &user.id).await {
+    match TestUser::fetch_one(&pool, &user.id).await {
         Err(sqlx::Error::RowNotFound) => (),
         res => panic!("Unexpected result {res:#?}"),
     }
@@ -119,6 +119,6 @@ async fn can_update_rows(pool: sqlx::SqlitePool) {
         panic!("Unexpected error from database on save(): {err:#?}");
     };
 
-    let user_2 = TestUser::get_one(&pool, &user.id).await.unwrap();
+    let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
     assert_eq!(user_2.name, "Sharkey");
 }
