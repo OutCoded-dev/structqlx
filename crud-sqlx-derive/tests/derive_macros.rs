@@ -1,10 +1,11 @@
-use crud_sqlx::traits::DatabaseModel;
-use crud_sqlx_derive::db_model;
+use crud_sqlx::DatabaseModel;
+use crud_sqlx_derive::CrudModel;
+use sqlx::prelude::FromRow;
 
 #[sqlx::test]
 fn model_with_non_optional_id() {
     #[allow(dead_code)]
-    #[db_model]
+    #[derive(Clone, CrudModel, Debug, FromRow, PartialEq)]
     struct MyStruct {
         id: i32,
         name: String,
@@ -15,7 +16,7 @@ fn model_with_non_optional_id() {
 #[test]
 fn model_with_optional_id() {
     #[allow(dead_code)]
-    #[db_model]
+    #[derive(Clone, CrudModel, Debug, FromRow, PartialEq)]
     struct MyStruct {
         id: Option<i32>,
         name: String,
@@ -25,7 +26,7 @@ fn model_with_optional_id() {
 
 #[sqlx::test]
 async fn can_select_into_model(pool: sqlx::SqlitePool) {
-    #[db_model]
+    #[derive(Clone, CrudModel, Debug, FromRow, PartialEq)]
     struct TestUser {
         id: i32,
         name: String,
@@ -46,7 +47,7 @@ async fn can_select_into_model(pool: sqlx::SqlitePool) {
 
 #[sqlx::test]
 async fn can_insert_from_model_to_table(pool: sqlx::SqlitePool) {
-    #[db_model]
+    #[derive(Clone, CrudModel, Debug, FromRow, PartialEq)]
     struct TestUser {
         id: i32,
         name: String,
@@ -70,7 +71,7 @@ async fn can_insert_from_model_to_table(pool: sqlx::SqlitePool) {
 
 #[sqlx::test]
 async fn can_delete_rows(pool: sqlx::SqlitePool) {
-    #[db_model]
+    #[derive(Clone, CrudModel, Debug, FromRow, PartialEq)]
     struct TestUser {
         id: i32,
         name: String,
@@ -97,7 +98,7 @@ async fn can_delete_rows(pool: sqlx::SqlitePool) {
 
 #[sqlx::test]
 async fn can_update_rows(pool: sqlx::SqlitePool) {
-    #[db_model]
+    #[derive(Clone, CrudModel, Debug, FromRow, PartialEq)]
     struct TestUser {
         id: i32,
         name: String,

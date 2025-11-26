@@ -10,33 +10,35 @@ use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input, token::Token};
 
-pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
-    let attr_args = match NestedMeta::parse_meta_list(attr.clone().into()) {
-        Ok(v) => v,
-        Err(e) => {
-            return TokenStream::from(Error::from(e).write_errors());
-        }
-    };
-    let args = CrudModelOptions::from_list(&attr_args).unwrap();
+pub fn expand_db_model(input: TokenStream) -> TokenStream {
+    // let attr_args = match NestedMeta::parse_meta_list(attr.clone().into()) {
+    //     Ok(v) => v,
+    //     Err(e) => {
+    //         return TokenStream::from(Error::from(e).write_errors());
+    //     }
+    // };
+    // let args = CrudModelOptions::from_list(&attr_args).unwrap();
 
     let input = parse_macro_input!(input as DeriveInput);
     let ident = input.ident.clone();
 
-    let table_name = args
-        .table_name
-        .unwrap_or_else(|| input.ident.to_string().to_case(Case::Snake))
-        .to_token_stream();
-    let schema = if let Some(schema) = args.schema {
-        quote! {
-            /// Return the schema for the table.
-            #[inline]
-            fn schema() -> &'static str {
-                #schema
-            }
-        }
-    } else {
-        quote! {}
-    };
+    // let table_name = args
+    //     .table_name
+    //     .unwrap_or_else(|| input.ident.to_string().to_case(Case::Snake))
+    //     .to_token_stream();
+    let table_name = input.ident.to_string().to_case(Case::Snake);
+    let schema = quote! {};
+    // if let Some(schema) = args.schema {
+    //     quote! {
+    //         /// Return the schema for the table.
+    //         #[inline]
+    //         fn schema() -> &'static str {
+    //             #schema
+    //         }
+    //     }
+    // } else {
+    //     quote! {}
+    // };
 
     let db_type = syn::Path::from_string("sqlx::Sqlite").unwrap();
 
@@ -51,11 +53,12 @@ pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
     let update_method = generate_update_method(model_struct.clone(), &db_type);
     let save_method = generate_save_method(model_struct.clone(), &db_type);
 
-    let getters = if args.generate_getters {
-        generate_getters(&model_struct)
-    } else {
-        quote! {}
-    };
+    // let getters = if args.generate_getters {
+    //     generate_getters(&model_struct)
+    // } else {
+    //     quote! {}
+    // };
+    let getters = generate_getters(&model_struct);
 
     let table_name = quote! {
         /// Return the table name for the model.
@@ -74,12 +77,7 @@ pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
     };
 
     quote! {
-        use sqlx::Executor;
-
-        #[derive(Clone, Debug, sqlx::FromRow, PartialEq)]
-        #input
-
-        impl<'a> DatabaseModel<'a, #id_type> for #ident {
+        impl<'a> ::crud_sqlx::traits::DatabaseModel<'a, #id_type> for #ident {
             type Database = #db_type;
 
             #schema
