@@ -2,6 +2,7 @@ use darling::FromMeta;
 use proc_macro::TokenStream;
 
 mod db_model;
+mod utils;
 
 #[derive(FromMeta)]
 struct CrudModelOptions {

@@ -1,11 +1,14 @@
 use std::collections::HashMap;
 
-use crate::CrudModelOptions;
+use crate::{
+    CrudModelOptions,
+    utils::{get_field_type_from_option, is_option},
+};
 use convert_case::{Case, Casing};
 use darling::{Error, FromMeta, ast::NestedMeta};
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input};
+use syn::{Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input, token::Token};
 
 pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
     let attr_args = match NestedMeta::parse_meta_list(attr.clone().into()) {
@@ -61,6 +64,15 @@ pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
         }
     };
 
+    let field_names = get_field_names(model_struct.clone());
+    let field_names_func = quote! {
+        fn field_names() -> Vec<&'static str> {
+            vec![
+                #(#field_names),*
+            ]
+        }
+    };
+
     quote! {
         use sqlx::Executor;
 
@@ -73,6 +85,8 @@ pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
             #schema
 
             #table_name
+
+            #field_names_func
 
             /// Return a model by its id.
             async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, id: &#id_type) -> sqlx::Result<#ident> {
@@ -151,7 +165,7 @@ pub fn expand_db_model(attr: TokenStream, input: TokenStream) -> TokenStream {
     .into()
 }
 
-fn get_id_field_type(model_struct: DataStruct) -> proc_macro2::TokenStream {
+pub(crate) fn get_id_field_type(model_struct: DataStruct) -> proc_macro2::TokenStream {
     let id_field = get_id_field_from_model(model_struct);
     let id_field_type = id_field.ty.clone();
     if !is_option(&id_field_type) {
@@ -163,85 +177,7 @@ fn get_id_field_type(model_struct: DataStruct) -> proc_macro2::TokenStream {
     }
 }
 
-/// Return true if a given type is an Option<>, false otherwise.
-fn is_option(type_: &syn::Type) -> bool {
-    let syn::Type::Path(type_) = type_ else {
-        return false;
-    };
-    if type_.qself.is_some() {
-        return false;
-    }
-    let type_path = &type_.path;
-    if type_path.segments.is_empty() || type_path.segments.last().unwrap().ident != "Option" {
-        return false;
-    }
-
-    if !(type_path.segments.len() == 1
-        || (type_path.segments.len() == 3
-            && ["core", "std"].contains(&type_path.segments[0].ident.to_string().as_str())
-            && type_path.segments[1].ident == "option"))
-    {
-        return false;
-    }
-
-    true
-}
-
-/// Walk the path of a given type. If it's an Option<*> field, return the inner
-/// type, otherwise return None.
-fn get_field_type_from_option(type_: &syn::Type) -> Option<&syn::Type> {
-    if !is_option(type_) {
-        return None;
-    }
-
-    let syn::Type::Path(type_) = type_ else {
-        return None;
-    };
-    let type_path = &type_.path;
-    let last_segment = type_path.segments.last().unwrap();
-    let syn::PathArguments::AngleBracketed(generics) = &last_segment.arguments else {
-        return None;
-    };
-    if generics.args.len() != 1 {
-        return None;
-    }
-    let syn::GenericArgument::Type(inner_type) = &generics.args[0] else {
-        return None;
-    };
-
-    Some(inner_type)
-}
-
-/// Return all the field names for a struct.
-///
-/// Don't return `id`, as it's a required field and this list is used to
-/// construct queries which may mutate its value if we aren't careful.
-fn get_field_names(model_struct: DataStruct) -> Vec<String> {
-    let named_fields = match model_struct.fields {
-        Fields::Named(ref fields) => fields,
-        _ => panic!("Can't handle unnamed fields"),
-    };
-
-    let id_field_type = get_id_field_from_model(model_struct.clone()).ty.clone();
-    let mut field_names: Vec<String> = vec![];
-    for field in named_fields.named.iter() {
-        if let Some(ident) = field.ident.clone() {
-            let field_name = ident.to_string();
-            if ["created_at", "updated_at", "deleted_at"].contains(&field_name.as_str()) {
-                continue;
-            }
-            // Don't try to write ID fields if they're options.
-            if is_option(&id_field_type) && field_name == "id" {
-                continue;
-            }
-            field_names.push(field_name);
-        }
-    }
-
-    field_names
-}
-
-fn generate_create_method(
+pub(crate) fn generate_create_method(
     model_struct: DataStruct,
     db_type: &syn::Path,
 ) -> proc_macro2::TokenStream {
@@ -287,7 +223,7 @@ fn generate_create_method(
 }
 
 /// Build and return an update() method for a writeable struct.
-fn generate_update_method(
+pub(crate) fn generate_update_method(
     model_struct: DataStruct,
     db_type: &syn::Path,
 ) -> proc_macro2::TokenStream {
@@ -330,7 +266,10 @@ fn generate_update_method(
     }
 }
 
-fn generate_save_method(model_struct: DataStruct, db_type: &syn::Path) -> proc_macro2::TokenStream {
+pub(crate) fn generate_save_method(
+    model_struct: DataStruct,
+    db_type: &syn::Path,
+) -> proc_macro2::TokenStream {
     if is_option(&get_id_field_from_model(model_struct).ty) {
         quote! {
             /// Save t
@@ -369,7 +308,7 @@ fn generate_save_method(model_struct: DataStruct, db_type: &syn::Path) -> proc_m
 }
 
 /// Generate a geetter function for each field on a model.
-fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenStream {
+pub(crate) fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenStream {
     let named_fields = match model_struct.fields {
         Fields::Named(ref fields) => fields.clone(),
         _ => panic!("Can't handle unnamed fields"),
@@ -397,7 +336,7 @@ fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenStream {
     }
 }
 
-fn get_id_field_from_model(model_struct: DataStruct) -> Field {
+pub(crate) fn get_id_field_from_model(model_struct: DataStruct) -> Field {
     let fields = model_struct.fields;
     match fields {
         Fields::Named(fields) => {
@@ -417,4 +356,33 @@ fn get_id_field_from_model(model_struct: DataStruct) -> Field {
         }
         _ => panic!("Can't handle unnamed fields"),
     }
+}
+
+/// Return all the field names for a struct.
+///
+/// Don't return `id`, as it's a required field and this list is used to
+/// construct queries which may mutate its value if we aren't careful.
+pub(crate) fn get_field_names(model_struct: DataStruct) -> Vec<String> {
+    let named_fields = match model_struct.fields {
+        Fields::Named(ref fields) => fields,
+        _ => panic!("Can't handle unnamed fields"),
+    };
+
+    let id_field_type = get_id_field_from_model(model_struct.clone()).ty.clone();
+    let mut field_names: Vec<String> = vec![];
+    for field in named_fields.named.iter() {
+        if let Some(ident) = field.ident.clone() {
+            let field_name = ident.to_string();
+            if ["created_at", "updated_at", "deleted_at"].contains(&field_name.as_str()) {
+                continue;
+            }
+            // Don't try to write ID fields if they're options.
+            if is_option(&id_field_type) && field_name == "id" {
+                continue;
+            }
+            field_names.push(field_name);
+        }
+    }
+
+    field_names
 }
