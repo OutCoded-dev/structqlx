@@ -67,3 +67,13 @@ pub trait DatabaseModel<'a, T>: Sized {
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
     ) -> impl Future<Output = sqlx::Result<i64>>;
 }
+
+/// A trait to be implemented on models which relate to other models.
+pub trait HasRelated<'a, R, T>
+where
+    R: DatabaseModel<'a, T>,
+{
+    fn fetch_all_related(&self) -> impl Future<Output = sqlx::Result<Vec<R>>>;
+    fn fetch_many_related(&self) -> impl Future<Output = sqlx::Result<Vec<R>>>;
+    fn fetch_one_related(&self) -> impl Future<Output = sqlx::Result<R>>;
+}
