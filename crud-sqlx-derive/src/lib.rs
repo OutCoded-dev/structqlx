@@ -5,22 +5,16 @@ use syn::token::Token;
 mod db_model;
 mod utils;
 
-#[derive(FromMeta)]
+#[derive(darling::FromAttributes, Default, Debug)]
+#[darling(attributes(db_model))]
 struct CrudModelOptions {
-    #[darling(default)]
     table_name: Option<String>,
-    #[darling(default)]
+    #[cfg(feature = "postgres")]
     schema: Option<String>,
-    #[darling(default)]
-    generate_getters: bool,
+    generate_getters: Option<bool>,
 }
 
 #[proc_macro_derive(CrudModel, attributes(db_model))]
 pub fn derive_database_model(input: TokenStream) -> TokenStream {
     db_model::expand_db_model(input)
-}
-
-#[proc_macro_attribute]
-pub fn db_model(_attr: TokenStream, _input: TokenStream) -> TokenStream {
-    TokenStream::new()
 }

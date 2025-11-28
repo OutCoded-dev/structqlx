@@ -5,42 +5,41 @@ use crate::{
     utils::{get_field_type_from_option, is_option},
 };
 use convert_case::{Case, Casing};
-use darling::{Error, FromMeta, ast::NestedMeta};
+use darling::{Error, FromAttributes, FromMeta, ast::NestedMeta};
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
-use syn::{Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input, token::Token};
+use syn::{
+    Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input, parse_quote, token::Token,
+};
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
-    // let attr_args = match NestedMeta::parse_meta_list(attr.clone().into()) {
-    //     Ok(v) => v,
-    //     Err(e) => {
-    //         return TokenStream::from(Error::from(e).write_errors());
-    //     }
-    // };
-    // let args = CrudModelOptions::from_list(&attr_args).unwrap();
-
     let input = parse_macro_input!(input as DeriveInput);
     let ident = input.ident.clone();
 
-    // let table_name = args
-    //     .table_name
-    //     .unwrap_or_else(|| input.ident.to_string().to_case(Case::Snake))
-    //     .to_token_stream();
-    let table_name = input.ident.to_string().to_case(Case::Snake);
-    let schema = quote! {};
-    // if let Some(schema) = args.schema {
-    //     quote! {
-    //         /// Return the schema for the table.
-    //         #[inline]
-    //         fn schema() -> &'static str {
-    //             #schema
-    //         }
-    //     }
-    // } else {
-    //     quote! {}
-    // };
+    let opts = match CrudModelOptions::from_attributes(&input.attrs) {
+        Ok(opts) => opts,
+        Err(err) => return err.write_errors().into(),
+    };
 
-    let db_type = syn::Path::from_string("sqlx::Sqlite").unwrap();
+    let table_name = opts
+        .table_name
+        .unwrap_or(ident.to_string().to_case(Case::Snake));
+
+    #[cfg(feature = "postgres")]
+    let schema = {
+        let schema = opts.schema.unwrap_or("public".to_string());
+        quote! {
+            #[doc("Return the schema in which the #table_name table resides")]
+            #[inline]
+            fn schema() -> &'static str {
+                #schema
+            }
+        }
+    };
+    #[cfg(not(feature = "postgres"))]
+    let schema = quote! {};
+
+    let db_type = parse_quote! {::sqlx::Sqlite};
 
     let model_struct: DataStruct = match &input.data {
         Data::Struct(model_struct) => model_struct.clone(),
@@ -53,12 +52,11 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let update_method = generate_update_method(model_struct.clone(), &db_type);
     let save_method = generate_save_method(model_struct.clone(), &db_type);
 
-    // let getters = if args.generate_getters {
-    //     generate_getters(&model_struct)
-    // } else {
-    //     quote! {}
-    // };
-    let getters = generate_getters(&model_struct);
+    let getters = if let Some(true) = opts.generate_getters {
+        generate_getters(&model_struct)
+    } else {
+        quote! {}
+    };
 
     let table_name = quote! {
         /// Return the table name for the model.

@@ -21,6 +21,7 @@ quote = "1.0.41"
 syn = "2.0.107"
 
 [dev-dependencies]
-sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }
+rstest = "0.26.1"
+sqlx = { version = "0.8.6", features = ["migrate", "runtime-tokio", "sqlite"] }
 time = "0.3.44"
 uuid = { version = "1.18.1", features = ["v4"] }
