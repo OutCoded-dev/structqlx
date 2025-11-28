@@ -5,11 +5,11 @@ use crate::{
     utils::{get_field_type_from_option, is_option},
 };
 use convert_case::{Case, Casing};
-use darling::{Error, FromAttributes, FromMeta, ast::NestedMeta};
+use darling::FromAttributes;
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, parse_macro_input, parse_quote, token::Token,
+    Data, DataStruct, DeriveInput, Field, Fields, Type, parse_macro_input, parse_quote,
 };
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
@@ -303,6 +303,21 @@ pub(crate) fn generate_save_method(
     }
 }
 
+fn field_type_is_string(field_type: &Type) -> bool {
+    if let Type::Path(path) = field_type {
+        let Some(type_ident) =
+            path.path
+                .get_ident()
+                .or(path.path.segments.last().map(|seg| &seg.ident))
+        else {
+            return false;
+        };
+
+        return *type_ident == "String";
+    }
+    false
+}
+
 /// Generate a geetter function for each field on a model.
 pub(crate) fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenStream {
     let named_fields = match model_struct.fields {
@@ -315,12 +330,17 @@ pub(crate) fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenS
         .iter()
         .map(|field| {
             let field_name = field.ident.clone().unwrap();
-            let field_type = field.ty.clone();
+            let return_type = if field_type_is_string(&field.ty) {
+                quote! {&str}
+            } else {
+                let ty = field.ty.clone();
+                quote! {&#ty}
+            };
             let comment =
                 format!("Return the current record's `{}`.", field_name).to_token_stream();
             quote! {
                 #[doc = #comment]
-                pub fn #field_name(&self) -> &#field_type {
+                pub fn #field_name(&self) -> #return_type {
                     &self.#field_name
                 }
             }

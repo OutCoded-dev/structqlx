@@ -22,7 +22,7 @@ impl From<QueryVerb> for String {
     }
 }
 
-pub trait DatabaseModel<'a, T>: Sized {
+pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     type Database;
 
     /// Return the table name for the model.
