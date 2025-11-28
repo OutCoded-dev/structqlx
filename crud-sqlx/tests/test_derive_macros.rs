@@ -20,6 +20,21 @@ fn generate_getters_adds_getter_fns() {
     assert_eq!(val.foo(), "Bar");
 }
 
+#[test]
+fn constructor_constructs() {
+    #[allow(unused)]
+    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[db_model(constructor)]
+    struct MyStruct {
+        id: i32,
+        foo: String,
+    }
+
+    let val = MyStruct::new(1, "Foo".to_string());
+    assert_eq!(val.id, 1);
+    assert_eq!(val.foo, "Foo");
+}
+
 mod bare_derive_macro {
     use super::*;
 

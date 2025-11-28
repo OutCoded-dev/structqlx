@@ -10,6 +10,7 @@ struct CrudModelOptions {
     #[cfg(feature = "postgres")]
     schema: Option<String>,
     generate_getters: Option<bool>,
+    constructor: Option<bool>,
 }
 
 #[proc_macro_derive(DatabaseModel, attributes(db_model))]

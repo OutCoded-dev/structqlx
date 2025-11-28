@@ -7,9 +7,11 @@ use crate::{
 use convert_case::{Case, Casing};
 use darling::FromAttributes;
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
+use proc_macro2::Punct;
+use quote::{ToTokens, quote, quote_spanned};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, Type, parse_macro_input, parse_quote,
+    Data, DataStruct, DeriveInput, Field, Fields, FieldsNamed, Token, Type, parse_macro_input,
+    parse_quote, punctuated::Punctuated,
 };
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
@@ -25,6 +27,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         .table_name
         .unwrap_or(ident.to_string().to_case(Case::Snake));
 
+    let schema = quote! {};
     #[cfg(feature = "postgres")]
     let schema = {
         let schema = opts.schema.unwrap_or("public".to_string());
@@ -36,8 +39,6 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             }
         }
     };
-    #[cfg(not(feature = "postgres"))]
-    let schema = quote! {};
 
     let db_type = parse_quote! {::sqlx::Sqlite};
 
@@ -51,6 +52,12 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let create_method = generate_create_method(model_struct.clone(), &db_type);
     let update_method = generate_update_method(model_struct.clone(), &db_type);
     let save_method = generate_save_method(model_struct.clone(), &db_type);
+
+    let constructor = if let Some(true) = opts.constructor {
+        generate_constructor(&ident, &model_struct)
+    } else {
+        quote! {}
+    };
 
     let getters = if let Some(true) = opts.generate_getters {
         generate_getters(&model_struct)
@@ -155,6 +162,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
 
         impl #ident {
+            #constructor
             #getters
         }
     }
@@ -401,4 +409,30 @@ pub(crate) fn get_field_names(model_struct: DataStruct) -> Vec<String> {
     }
 
     field_names
+}
+
+fn generate_constructor(ident: &syn::Ident, model_struct: &DataStruct) -> proc_macro2::TokenStream {
+    let comment = format!("Create and return a new {} instance.", ident.to_string());
+    let Fields::Named(fields) = model_struct.fields.clone() else {
+        panic!("Cannot build a constructor from unnamed fields",);
+    };
+
+    let mut params: Punctuated<proc_macro2::TokenStream, Token![,]> = Punctuated::new();
+    let mut assignments: Punctuated<syn::Ident, Token![,]> = Punctuated::new();
+
+    for field in fields.named.iter() {
+        let ident = field.ident.as_ref().unwrap();
+        let ty = field.ty.clone();
+        params.push(quote! {#ident: #ty});
+        assignments.push(ident.clone());
+    }
+
+    quote! {
+        #[doc = #comment]
+        pub fn new(#params) -> Self {
+            Self {
+                #assignments
+            }
+        }
+    }
 }
