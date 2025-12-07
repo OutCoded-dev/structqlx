@@ -38,26 +38,42 @@ fn constructor_constructs() {
 mod bare_derive_macro {
     use super::*;
 
-    #[test]
-    fn model_may_have_non_optional_id() {
+    #[sqlx::test(fixtures("test_user"))]
+    async fn model_may_have_required_id(pool: sqlx::SqlitePool) {
         #[allow(dead_code)]
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-        struct MyStruct {
+        struct TestUser {
             id: i32,
             name: String,
-            created_at: String,
         }
+
+        let mut record = TestUser {
+            id: 1,
+            name: "Test".into(),
+        };
+        record.create(&pool).await.unwrap();
+
+        assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
     }
 
-    #[test]
-    fn model_may_have_optional_id() {
+    #[sqlx::test(fixtures("test_user"))]
+    fn model_may_have_optional_id(pool: sqlx::SqlitePool) {
         #[allow(dead_code)]
-        #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-        struct MyStruct {
+        #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq, Default)]
+        struct TestUser {
             id: Option<i32>,
             name: String,
-            created_at: String,
         }
+
+        let mut record = TestUser {
+            name: "Is this number got curves?".into(),
+            ..Default::default()
+        };
+        record.create(&pool).await.unwrap();
+
+        let records = TestUser::fetch_all(&pool).await.unwrap();
+        assert_eq!(1, records.len());
+        assert_eq!(records.first().unwrap().name, "Is this number got curves?");
     }
 
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
