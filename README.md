@@ -6,14 +6,20 @@ Simple CRUD operations for structs built on top of sqlx.
 use structqlx::macros::DatabaseModel;
 
 #[derive(DatabaseModel)]
-#[db_model(generate_getters)]
+#[db_model(db = ::sqlx::Sqlite)]
 struct SampleUser {
-    username: String,
-    age: u32,
-    gender: String,
+    pub id: i32,
+    pub username: String,
+    pub age: u32,
+    pub attitude: String,
 }
 
-let mut user = SampleUser::new().set_username("Foo".into()).age(10000).gender("chaotic");
-let mut user.save();
+let user = SampleUser::new()
+    .set_username("Foo".into())
+    .age(10000)
+    .attitude("chaotic")
+    .create()
+    .await;
 
+let user_2 = SampleUser::fetch_one(&pool, 2).await.unwrap();
 ```
