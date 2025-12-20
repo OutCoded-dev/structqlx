@@ -7,10 +7,9 @@ use crate::{
 use convert_case::{Case, Casing};
 use darling::FromAttributes;
 use proc_macro::TokenStream;
-use proc_macro2::Punct;
-use quote::{ToTokens, quote, quote_spanned};
+use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, FieldsNamed, Token, Type, parse_macro_input,
+    Data, DataStruct, DeriveInput, Field, Fields, Token, Type, parse_macro_input,
     parse_quote, punctuated::Punctuated,
 };
 
@@ -412,7 +411,7 @@ pub(crate) fn get_field_names(model_struct: DataStruct) -> Vec<String> {
 }
 
 fn generate_constructor(ident: &syn::Ident, model_struct: &DataStruct) -> proc_macro2::TokenStream {
-    let comment = format!("Create and return a new {} instance.", ident.to_string());
+    let comment = format!("Create and return a new {} instance.", ident);
     let Fields::Named(fields) = model_struct.fields.clone() else {
         panic!("Cannot build a constructor from unnamed fields",);
     };
