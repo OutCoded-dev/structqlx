@@ -1,0 +1,15 @@
+[package]
+name = "structqlx"
+version = "0.1.0"
+edition = "2024"
+publish = true
+
+[features]
+default = ["macros", "sqlite"]
+macros = ["dep:structqlx-macros"]
+sqlite = ["sqlx/sqlite"]
+postgres = ["sqlx/postgres"]
+
+[dependencies]
+sqlx = "0.8.6"
+structqlx-macros = { path = "../structqlx-macros", optional = true}

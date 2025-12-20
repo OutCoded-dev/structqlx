@@ -1,16 +1,16 @@
 use std::collections::HashMap;
 
 use crate::{
-    CrudModelOptions,
     utils::{get_field_type_from_option, is_option},
+    CrudModelOptions,
 };
 use convert_case::{Case, Casing};
 use darling::FromAttributes;
 use proc_macro::TokenStream;
-use quote::{ToTokens, quote};
+use quote::{quote, ToTokens};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, Token, Type, parse_macro_input,
-    parse_quote, punctuated::Punctuated,
+    parse_macro_input, parse_quote, punctuated::Punctuated, Data, DataStruct, DeriveInput, Field,
+    Fields, Token, Type,
 };
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
@@ -81,7 +81,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     };
 
     quote! {
-        impl<'a> ::crud_sqlx::traits::DatabaseModel<'a, #id_type> for #ident {
+        impl<'a> ::structqlx::traits::DatabaseModel<'a, #id_type> for #ident {
             type Database = #db_type;
 
             #schema

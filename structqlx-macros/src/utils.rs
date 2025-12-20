@@ -1,4 +1,4 @@
-//! General-purpose utilities for deriving crud-sqlx
+//! General-purpose utilities for deriving structqlx
 
 /// Return true if a given type is an Option<>, false otherwise.
 pub(crate) fn is_option(type_: &syn::Type) -> bool {

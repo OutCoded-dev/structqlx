@@ -1,4 +1,4 @@
-use crud_sqlx::derive::DatabaseModel;
+use structqlx::macros::DatabaseModel;
 use sqlx::prelude::FromRow;
 
 #[test]
