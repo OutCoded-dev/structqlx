@@ -1,8 +1,11 @@
 [package]
 name = "structqlx"
+description = "A crate for adding generating simple db models on top of SQLX."
 version = "0.1.0"
 edition = "2024"
 publish = true
+license = "MIT"
+repository = "https://gitlab.com/gmb/structqlx"
 
 [features]
 default = ["macros", "sqlite"]
@@ -12,4 +15,4 @@ postgres = ["sqlx/postgres"]
 
 [dependencies]
 sqlx = "0.8.6"
-structqlx-macros = { path = "../structqlx-macros", optional = true}
+structqlx-macros = { version = "0.1.0", path = "../structqlx-macros", optional = true}

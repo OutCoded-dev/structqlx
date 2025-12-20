@@ -1,8 +1,11 @@
 [package]
 name = "structqlx-macros"
+description = "Macros to power structqlx."
 version = "0.1.0"
 edition = "2024"
 publish = true
+license = "MIT"
+repository = "https://gitlab.com/gmb/structqlx"
 
 [lib]
 proc-macro = true
