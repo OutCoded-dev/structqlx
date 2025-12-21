@@ -1,0 +1,27 @@
+version: "3"
+
+tasks:
+  test:setup:
+    env:
+      POSTGRES_USER: structqlx
+      POSTGRES_PASSWORD: structqlx
+    cmds:
+      - >
+        _ignore=$(docker stop structqlx-test-pg)
+        docker run \
+          --rm \
+          --publish 127.0.0.1:25432:5432 \
+          --env POSTGRES_USER \
+          --env POSTGRES_PASSWORD \
+          --detach \
+          --name structqlx-test-pg \
+          postgres:18-alpine
+
+  test:
+    desc: "Run all the tests for structqlx and structqlx-macros"
+    env:
+      DATABASE_URL: postgres://structqlx:structqlx@127.0.0.1:25432/structqlx
+    cmds:
+      - task: test:setup
+      - defer: docker stop structqlx-test-pg
+      - cargo test
