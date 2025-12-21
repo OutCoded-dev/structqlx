@@ -1,4 +1,4 @@
-//! DB traits for Nexus DB objects.
+//! Traits to be derived for structs which use structqlx.
 
 use sqlx::QueryBuilder;
 
