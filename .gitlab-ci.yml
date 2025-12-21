@@ -11,23 +11,43 @@ include:
 
 stages:
   - test
-  - secret-detection
+  - security
+  - publish
 
 variables:
   SECRET_DETECTION_ENABLED: "true"
 
 sast:
-  stage: test
+  stage: security
 
 secret_detection:
-  stage: secret-detection
+  stage: security
 
 test:
+  stage: test
   image: rust
+  services:
+    - postgres
+  variables:
+    POSTGRES_DB: structqlx
+    POSTGRES_USER: structqlx
+    POSTGRES_PASSWORD: structqlx
+    POSTGRES_HOST_AUTH_METHOD: trust
+    DATABASE_URL: postgres://structqlx:structqlx@postgres:5432/structqlx
   script:
-    - cargo test --all-features
+    - cargo test
 
 lint:
+  stage: test
   image: rust
   script:
     - cargo clippy --all-targets --all-features
+
+publish:crates.io:
+  stage: publish
+  image: rust
+  script:
+    - cargo publish
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+/
+      when: manual
