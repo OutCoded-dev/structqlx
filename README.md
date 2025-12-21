@@ -6,7 +6,7 @@ Simple CRUD operations for structs built on top of sqlx.
 use structqlx::macros::DatabaseModel;
 
 #[derive(DatabaseModel)]
-#[db_model(db = ::sqlx::Sqlite)]
+#[db_model(databae = ::sqlx::Sqlite, generate_getters)]
 struct SampleUser {
     pub id: i32,
     pub username: String,

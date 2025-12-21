@@ -1,17 +1,25 @@
 use std::collections::HashMap;
 
-use crate::{
-    utils::{get_field_type_from_option, is_option},
-    CrudModelOptions,
-};
+use crate::utils::{get_field_type_from_option, is_option};
 use convert_case::{Case, Casing};
 use darling::FromAttributes;
 use proc_macro::TokenStream;
-use quote::{quote, ToTokens};
+use quote::{ToTokens, quote};
 use syn::{
-    parse_macro_input, parse_quote, punctuated::Punctuated, Data, DataStruct, DeriveInput, Field,
-    Fields, Token, Type,
+    Data, DataStruct, DeriveInput, Field, Fields, Token, Type, parse_macro_input, parse_quote,
+    punctuated::Punctuated,
 };
+
+#[derive(darling::FromAttributes, Default, Debug)]
+#[darling(attributes(db_model))]
+struct CrudModelOptions {
+    table_name: Option<String>,
+    #[cfg(feature = "postgres")]
+    schema: Option<String>,
+    generate_getters: Option<bool>,
+    constructor: Option<bool>,
+    database: Option<syn::Path>,
+}
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
@@ -39,7 +47,13 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    let db_type = parse_quote! {::sqlx::Sqlite};
+    let default_db_type = if cfg!(feature = "postgres") {
+        parse_quote! {::sqlx::Postgres}
+    } else {
+        parse_quote! {::sqlx::Sqlite}
+    };
+
+    let db_type = opts.database.unwrap_or(default_db_type);
 
     let model_struct: DataStruct = match &input.data {
         Data::Struct(model_struct) => model_struct.clone(),

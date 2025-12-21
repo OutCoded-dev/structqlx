@@ -2,7 +2,7 @@
 name = "structqlx-macros"
 description = "Macros to power structqlx."
 author = "Graham Binns <graham@outcoded.dev>"
-version = "0.1.0"
+version = "0.2.0-alpha.1"
 edition = "2024"
 publish = true
 license = "MIT"
