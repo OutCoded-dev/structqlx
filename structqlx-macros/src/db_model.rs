@@ -6,19 +6,19 @@ use darling::FromAttributes;
 use proc_macro::TokenStream;
 use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, Token, Type, parse_macro_input, parse_quote,
+    Data, DataStruct, DeriveInput, Field, Fields, Token, Type, parse_macro_input,
     punctuated::Punctuated,
 };
 
-#[derive(darling::FromAttributes, Default, Debug)]
-#[darling(attributes(db_model))]
+#[derive(darling::FromAttributes, Debug)]
+#[darling(attributes(structqlx))]
 struct CrudModelOptions {
     table_name: Option<String>,
     #[cfg(feature = "postgres")]
     schema: Option<String>,
     generate_getters: Option<bool>,
     constructor: Option<bool>,
-    database: Option<syn::Path>,
+    engine: syn::Path,
 }
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
@@ -47,14 +47,6 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    let default_db_type = if cfg!(feature = "postgres") {
-        parse_quote! {::sqlx::Postgres}
-    } else {
-        parse_quote! {::sqlx::Sqlite}
-    };
-
-    let db_type = opts.database.unwrap_or(default_db_type);
-
     let model_struct: DataStruct = match &input.data {
         Data::Struct(model_struct) => model_struct.clone(),
         _ => panic!("CrudModel can only be derived for structs."),
@@ -62,9 +54,9 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
     // ID related fields.
     let id_type = get_id_field_type(model_struct.clone());
-    let create_method = generate_create_method(model_struct.clone(), &db_type);
-    let update_method = generate_update_method(model_struct.clone(), &db_type);
-    let save_method = generate_save_method(model_struct.clone(), &db_type);
+    let create_method = generate_create_method(model_struct.clone(), &opts.engine);
+    let update_method = generate_update_method(model_struct.clone(), &opts.engine);
+    let save_method = generate_save_method(model_struct.clone(), &opts.engine);
 
     let constructor = if let Some(true) = opts.constructor {
         generate_constructor(&ident, &model_struct)
@@ -94,9 +86,10 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
+    let db_engine = &opts.engine;
     quote! {
         impl<'a> ::structqlx::traits::DatabaseModel<'a, #id_type> for #ident {
-            type Database = #db_type;
+            type Database = #db_engine;
 
             #schema
 
@@ -107,7 +100,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             /// Return a model by its id.
             async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, id: &#id_type) -> sqlx::Result<#ident> {
                 let query = format!("SELECT * FROM {} WHERE id = $1", Self::table_name());
-                sqlx::query_as::<#db_type, #ident>(&query)
+                sqlx::query_as::<#db_engine, #ident>(&query)
                     .bind(id)
                     .fetch_one(executor)
                     .await
@@ -115,7 +108,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
             /// Return one or more rows matching `ids`.
             async fn fetch_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#id_type]) -> sqlx::Result<Vec<#ident>> {
-                let mut builder = sqlx::QueryBuilder::<#db_type>::new(format!("SELECT * FROM {} WHERE id IN (", Self::table_name()));
+                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("SELECT * FROM {} WHERE id IN (", Self::table_name()));
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -129,14 +122,14 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             /// Return all records in the table.
             async fn fetch_all(executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Vec<#ident>> {
                 let query = format!("SELECT * FROM {}", Self::table_name());
-                sqlx::query_as::<#db_type, #ident>(&query)
+                sqlx::query_as::<#db_engine, #ident>(&query)
                     .fetch_all(executor)
                     .await
             }
 
             /// Delete one or more records from the table.
             async fn delete_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#id_type]) -> sqlx::Result<()> {
-                let mut builder = sqlx::QueryBuilder::<#db_type>::new(format!("DELETE FROM {} WHERE id IN (", Self::table_name()));
+                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("DELETE FROM {} WHERE id IN (", Self::table_name()));
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -150,7 +143,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             /// Delete exactly one record -- the current one.
             async fn delete(&self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
                 let query = format!("DELETE FROM {} WHERE id = $1", Self::table_name());
-                sqlx::query::<#db_type>(&query)
+                sqlx::query::<#db_engine>(&query)
                     .bind(&self.id)
                     .execute(executor)
                     .await?;
@@ -196,7 +189,7 @@ pub(crate) fn get_id_field_type(model_struct: DataStruct) -> proc_macro2::TokenS
 
 pub(crate) fn generate_create_method(
     model_struct: DataStruct,
-    db_type: &syn::Path,
+    db_engine: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let field_names = get_field_names(model_struct.clone());
     let field_names_clause = field_names.join(", ");
@@ -227,7 +220,7 @@ pub(crate) fn generate_create_method(
         async fn create(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Self> {
             let table_name = Self::table_name();
             let query = format!(#query);
-            let mut query = sqlx::query_as::<#db_type, Self>(&query);
+            let mut query = sqlx::query_as::<#db_engine, Self>(&query);
             #(#bind_exprs);*
             ;
             let result = query.fetch_one(executor).await;
@@ -242,7 +235,7 @@ pub(crate) fn generate_create_method(
 /// Build and return an update() method for a writeable struct.
 pub(crate) fn generate_update_method(
     model_struct: DataStruct,
-    db_type: &syn::Path,
+    db_engine: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let field_names = get_field_names(model_struct.clone());
     let set_clause = field_names
@@ -267,7 +260,7 @@ pub(crate) fn generate_update_method(
         async fn update(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
             let table_name = Self::table_name();
             let query = format!(#query);
-            let mut query = sqlx::query_as::<#db_type, Self>(&query);
+            let mut query = sqlx::query_as::<#db_engine, Self>(&query);
             #(#bind_exprs);*
             ;
             query = query.bind(self.id.clone());
@@ -285,7 +278,7 @@ pub(crate) fn generate_update_method(
 
 pub(crate) fn generate_save_method(
     model_struct: DataStruct,
-    db_type: &syn::Path,
+    db_engine: &syn::Path,
 ) -> proc_macro2::TokenStream {
     if is_option(&get_id_field_from_model(model_struct).ty) {
         quote! {
@@ -309,7 +302,7 @@ pub(crate) fn generate_save_method(
             async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
                 use sqlx::Row;
                 let query = format!("SELECT 1 AS row_exists FROM {} WHERE id = $1;", Self::table_name());
-                let exists = sqlx::query::<#db_type>(&query)
+                let exists = sqlx::query::<#db_engine>(&query)
                     .bind(&self.id)
                     .fetch_one(executor)
                     .await

@@ -5,7 +5,7 @@ use structqlx::macros::DatabaseModel;
 fn generate_getters_adds_getter_fns() {
     #[allow(unused)]
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-    #[db_model(generate_getters)]
+    #[structqlx(generate_getters, engine = ::sqlx::Sqlite)]
     struct MyStruct {
         id: i32,
         foo: String,
@@ -24,7 +24,7 @@ fn generate_getters_adds_getter_fns() {
 fn constructor_constructs() {
     #[allow(unused)]
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-    #[db_model(constructor)]
+    #[structqlx(constructor, engine = ::sqlx::Sqlite)]
     struct MyStruct {
         id: i32,
         foo: String,
@@ -42,6 +42,7 @@ mod bare_derive_macro {
     async fn model_may_have_required_id(pool: sqlx::SqlitePool) {
         #[allow(dead_code)]
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+        #[structqlx(engine = ::sqlx::Sqlite)]
         struct TestUser {
             id: i32,
             name: String,
@@ -60,6 +61,7 @@ mod bare_derive_macro {
     fn model_may_have_optional_id(pool: sqlx::SqlitePool) {
         #[allow(dead_code)]
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq, Default)]
+        #[structqlx(engine = sqlx::Sqlite)]
         struct TestUser {
             id: Option<i32>,
             name: String,
@@ -77,6 +79,7 @@ mod bare_derive_macro {
     }
 
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[structqlx(engine = sqlx::Sqlite)]
     struct TestUser {
         id: i32,
         name: String,
@@ -145,7 +148,7 @@ mod with_named_table {
     use super::*;
 
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-    #[db_model(table_name = "a_different_table_name")]
+    #[structqlx(table_name = "a_different_table_name", engine = sqlx::Sqlite)]
     struct TestUser {
         id: i32,
         name: String,
