@@ -1,5 +1,5 @@
-use structqlx::macros::DatabaseModel;
 use sqlx::prelude::FromRow;
+use structqlx::macros::DatabaseModel;
 
 #[test]
 fn generate_getters_adds_getter_fns() {
