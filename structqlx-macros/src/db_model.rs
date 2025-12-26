@@ -4,9 +4,10 @@ use crate::utils::{get_field_type_from_option, is_option};
 use convert_case::{Case, Casing};
 use darling::FromAttributes;
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, Token, Type, parse_macro_input,
+    Data, DataStruct, DeriveInput, Field, Fields, Ident, Token, Type, parse_macro_input,
     punctuated::Punctuated,
 };
 
@@ -70,7 +71,12 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         quote! {}
     };
 
-    let table_name = quote! {
+    let db_engine = &opts.engine;
+
+    let find_by_funcs =
+        generate_find_by_funcs(&model_struct.fields, &table_name, db_engine, &ident);
+
+    let table_name_fn = quote! {
         /// Return the table name for the model.
         fn table_name() -> String {
             #table_name.to_string()
@@ -86,14 +92,13 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    let db_engine = &opts.engine;
     quote! {
         impl<'a> ::structqlx::traits::DatabaseModel<'a, #id_type> for #ident {
             type Database = #db_engine;
 
             #schema
 
-            #table_name
+            #table_name_fn
 
             #field_names_func
 
@@ -170,6 +175,8 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         impl #ident {
             #constructor
             #getters
+
+            #find_by_funcs
         }
     }
     .into()
@@ -330,6 +337,42 @@ fn field_type_is_string(field_type: &Type) -> bool {
         return *type_ident == "String";
     }
     false
+}
+
+/// Generate find_by_<X> methods.
+pub(crate) fn generate_find_by_funcs(
+    fields: &Fields,
+    table_name: &str,
+    db_engine: &syn::Path,
+    ident: &syn::Ident,
+) -> proc_macro2::TokenStream {
+    let find_by_funcs = fields
+        .iter()
+        .filter_map(|field| {
+            let field_ident = field.ident.as_ref()?;
+            if field_ident.to_string() == "id" {
+                return None;
+            }
+
+            let ty = &field.ty;
+            let func_ident = Ident::new(&format!("find_by_{}", field_ident), Span::call_site());
+            let query = format!(
+                "SELECT * FROM {table_name} WHERE {field_name} = $1",
+                field_name = field_ident.to_string()
+            );
+            let func = quote! {
+                async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Vec<Self>, sqlx::Error> {
+                    let query = #query;
+                    sqlx::query_as::<#db_engine, #ident>(&query)
+                        .bind(#field_ident)
+                        .fetch_all(executor)
+                        .await
+                }
+            };
+            Some(func)
+        })
+        .collect();
+    find_by_funcs
 }
 
 /// Generate a geetter function for each field on a model.

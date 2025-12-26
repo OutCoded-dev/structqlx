@@ -142,6 +142,20 @@ mod bare_derive_macro {
         let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
         assert_eq!(user_2.name, "Sharkey");
     }
+
+    #[sqlx::test(fixtures("test_user"))]
+    async fn can_find_by_non_id_fields(pool: sqlx::PgPool) {
+        let mut user = TestUser {
+            id: 1,
+            name: "Test User".to_string(),
+        };
+        user.save(&pool).await.unwrap();
+
+        let result = TestUser::find_by_name(&pool, "Test User".to_string())
+            .await
+            .unwrap();
+        assert_eq!(result, vec![user]);
+    }
 }
 
 mod with_named_table {

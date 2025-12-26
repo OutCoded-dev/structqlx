@@ -106,6 +106,26 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
         };
         QueryBuilder::new(query)
     }
+
+    /// Return a QueryBuilder for SELECT.
+    fn select_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+        Self::query_builder(QueryVerb::Select)
+    }
+
+    /// Return a QueryBuilder for SELECT.
+    fn insert_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+        Self::query_builder(QueryVerb::Insert)
+    }
+
+    /// Return a QueryBuilder for SELECT.
+    fn update_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+        Self::query_builder(QueryVerb::Update)
+    }
+
+    /// Return a QueryBuilder for SELECT.
+    fn delete_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+        Self::query_builder(QueryVerb::Delete)
+    }
 }
 
 /// A trait to be implemented on models which relate to other models.
