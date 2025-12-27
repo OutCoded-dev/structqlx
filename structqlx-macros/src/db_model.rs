@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::utils::is_option;
 use convert_case::{Case, Casing};
-use darling::FromAttributes;
+use darling::{FromAttributes, FromMeta};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
@@ -19,7 +19,8 @@ struct CrudModelOptions {
     schema: Option<String>,
     generate_getters: Option<bool>,
     constructor: Option<bool>,
-    pk: Option<String>,
+    #[darling(rename = "pk")]
+    primary_key_expr: Option<syn::Expr>,
     engine: syn::Path,
 }
 
@@ -67,7 +68,18 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     }
 
     // ID related fields.
-    let pk_field_name = opts.pk.unwrap_or("id".to_string());
+    let primary_key_expr = opts
+        .primary_key_expr
+        .unwrap_or(syn::Expr::from_string("id").unwrap());
+
+    let pk_field_name = match primary_key_expr {
+        syn::Expr::Lit(expr) => match expr.lit {
+            syn::Lit::Str(lit_str) => lit_str.value(),
+            _ => "id".to_string(),
+        },
+        _ => "id".to_string(),
+    };
+
     let Some(pk_field) = fields_by_name.get(&pk_field_name) else {
         panic!("Struct has no field {pk_field_name:?}")
     };
