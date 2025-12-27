@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::utils::{get_field_type_from_option, is_option};
+use crate::utils::is_option;
 use convert_case::{Case, Casing};
 use darling::FromAttributes;
 use proc_macro::TokenStream;
@@ -19,6 +19,7 @@ struct CrudModelOptions {
     schema: Option<String>,
     generate_getters: Option<bool>,
     constructor: Option<bool>,
+    pk: Option<String>,
     engine: syn::Path,
 }
 
@@ -53,11 +54,35 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         _ => panic!("CrudModel can only be derived for structs."),
     };
 
+    let Fields::Named(fields) = &model_struct.fields else {
+        panic!("Cannot work with anonymous fields")
+    };
+    let mut fields_by_name: HashMap<String, &Field> = HashMap::new();
+
+    for field in fields.named.iter() {
+        let Some(ident) = field.ident.clone() else {
+            continue;
+        };
+        fields_by_name.insert(ident.to_string(), field);
+    }
+
     // ID related fields.
-    let id_type = get_id_field_type(model_struct.clone());
-    let create_method = generate_create_method(model_struct.clone(), &opts.engine);
-    let update_method = generate_update_method(model_struct.clone(), &opts.engine);
-    let save_method = generate_save_method(model_struct.clone(), &opts.engine);
+    let pk_field_name = opts.pk.unwrap_or("id".to_string());
+    let Some(pk_field) = fields_by_name.get(&pk_field_name) else {
+        panic!("Struct has no field {pk_field_name:?}")
+    };
+
+    let field_names = fields_by_name
+        .keys()
+        .map(|k| k.clone())
+        .collect::<Vec<String>>();
+
+    let pk_type = &pk_field.ty;
+    let pk_field_ident = &pk_field.ident.as_ref().unwrap(); // Safe, since we enforce named fields.
+
+    let create_method = generate_create_method(&opts.engine, &field_names);
+    let update_method = generate_update_method(&opts.engine, &pk_field, &field_names);
+    let save_method = generate_save_method(model_struct.clone(), &opts.engine, &pk_field);
 
     let constructor = if let Some(true) = opts.constructor {
         generate_constructor(&ident, &model_struct)
@@ -83,7 +108,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    let field_names = get_field_names(model_struct.clone());
+    let field_names = fields_by_name.keys();
     let field_names_func = quote! {
         fn field_names() -> Vec<&'static str> {
             vec![
@@ -93,7 +118,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     };
 
     quote! {
-        impl<'a> ::structqlx::traits::DatabaseModel<'a, #id_type> for #ident {
+        impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
             type Database = #db_engine;
 
             #schema
@@ -103,8 +128,8 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             #field_names_func
 
             /// Return a model by its id.
-            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, id: &#id_type) -> sqlx::Result<#ident> {
-                let query = format!("SELECT * FROM {} WHERE id = $1", Self::table_name());
+            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, id: &#pk_type) -> sqlx::Result<#ident> {
+                let query = format!("SELECT * FROM {} WHERE {} = $1", Self::table_name(), #pk_field_name);
                 sqlx::query_as::<#db_engine, #ident>(&query)
                     .bind(id)
                     .fetch_one(executor)
@@ -112,7 +137,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             }
 
             /// Return one or more rows matching `ids`.
-            async fn fetch_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#id_type]) -> sqlx::Result<Vec<#ident>> {
+            async fn fetch_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<Vec<#ident>> {
                 let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("SELECT * FROM {} WHERE id IN (", Self::table_name()));
                 let mut separated = builder.separated(", ");
                 for id in ids {
@@ -133,8 +158,8 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             }
 
             /// Delete one or more records from the table.
-            async fn delete_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#id_type]) -> sqlx::Result<()> {
-                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("DELETE FROM {} WHERE id IN (", Self::table_name()));
+            async fn delete_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<()> {
+                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("DELETE FROM {} WHERE {} IN (", Self::table_name(), #pk_field_name));
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -147,9 +172,9 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
             /// Delete exactly one record -- the current one.
             async fn delete(&self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
-                let query = format!("DELETE FROM {} WHERE id = $1", Self::table_name());
+                let query = format!("DELETE FROM {} WHERE {} = $1", Self::table_name(), #pk_field_name);
                 sqlx::query::<#db_engine>(&query)
-                    .bind(&self.id)
+                    .bind(&self.#pk_field_ident)
                     .execute(executor)
                     .await?;
                 Ok(())
@@ -182,23 +207,10 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     .into()
 }
 
-pub(crate) fn get_id_field_type(model_struct: DataStruct) -> proc_macro2::TokenStream {
-    let id_field = get_id_field_from_model(model_struct);
-    let id_field_type = id_field.ty.clone();
-    if !is_option(&id_field_type) {
-        return quote!(#id_field_type);
-    }
-    match get_field_type_from_option(&id_field_type) {
-        Some(ty_) => quote! {#ty_},
-        None => quote!(#id_field_type),
-    }
-}
-
 pub(crate) fn generate_create_method(
-    model_struct: DataStruct,
     db_engine: &syn::Path,
+    field_names: &Vec<String>,
 ) -> proc_macro2::TokenStream {
-    let field_names = get_field_names(model_struct.clone());
     let field_names_clause = field_names.join(", ");
     let values_clause = field_names
         .iter()
@@ -241,13 +253,21 @@ pub(crate) fn generate_create_method(
 
 /// Build and return an update() method for a writeable struct.
 pub(crate) fn generate_update_method(
-    model_struct: DataStruct,
     db_engine: &syn::Path,
+    pk_field: &Field,
+    field_names: &Vec<String>,
 ) -> proc_macro2::TokenStream {
-    let field_names = get_field_names(model_struct.clone());
+    let pk_field_ident = pk_field.ident.as_ref().unwrap();
+    let pk_field_name = pk_field_ident.to_string();
     let field_names = field_names
-        .into_iter()
-        .filter(|fieldname| *fieldname != "id")
+        .iter()
+        .filter_map(|fieldname| {
+            if *fieldname != pk_field_name {
+                Some(fieldname.clone())
+            } else {
+                None
+            }
+        })
         .collect::<Vec<String>>();
     let set_clause = field_names
         .iter()
@@ -256,8 +276,9 @@ pub(crate) fn generate_update_method(
         .collect::<Vec<String>>()
         .join(", ");
     let id_clause = format!("${}", field_names.len() + 1);
-    let query =
-        format!("UPDATE {{table_name}} SET {set_clause} WHERE id = {id_clause} RETURNING *;");
+    let query = format!(
+        "UPDATE {{table_name}} SET {set_clause} WHERE {pk_field_name} = {id_clause} RETURNING *;",
+    );
 
     let bind_exprs = field_names
         .iter()
@@ -274,7 +295,7 @@ pub(crate) fn generate_update_method(
             let query_sql = format!(#query);
             let mut query = sqlx::query_as::<#db_engine, Self>(&query_sql);
             #(#bind_exprs);*;
-            query = query.bind(self.id.clone());
+            query = query.bind(self.#pk_field_ident.clone());
             let result = query.fetch_one(executor).await?;
             let _ = std::mem::replace(self, result);
             Ok(())
@@ -285,15 +306,17 @@ pub(crate) fn generate_update_method(
 pub(crate) fn generate_save_method(
     model_struct: DataStruct,
     db_engine: &syn::Path,
+    pk_field: &Field,
 ) -> proc_macro2::TokenStream {
-    if is_option(&get_id_field_from_model(model_struct).ty) {
+    let pk_field_ident = pk_field.ident.as_ref().unwrap();
+    if is_option(&pk_field.ty) {
         quote! {
             /// Save t
             ///
             /// If the record has no ID, create a new record. Otherwise, update
             /// the existing one.
             async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
-                if self.id.is_none() {
+                if self.#pk_field_ident.is_none() {
                     self.create(executor).await.map(|_| ())
                 } else {
                     self.update(executor).await
@@ -301,15 +324,16 @@ pub(crate) fn generate_save_method(
             }
         }
     } else {
+        let pk_field_name = pk_field.ident.as_ref().unwrap().to_string();
         quote! {
             /// Save the record.
             ///
             /// If the record exists in the database, update it. Otherwise, create it.
             async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
                 use sqlx::Row;
-                let query = format!("SELECT true AS row_exists FROM {} WHERE id = $1;", Self::table_name());
+                let query = format!("SELECT true AS row_exists FROM {} WHERE {} = $1;", Self::table_name(), #pk_field_name);
                 let result = sqlx::query::<#db_engine>(&query)
-                    .bind(&self.id)
+                    .bind(&self.#pk_field_ident)
                     .fetch_one(executor)
                     .await;
                 if result.is_ok() {
@@ -404,57 +428,6 @@ pub(crate) fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenS
     quote! {
         #(#getters)*
     }
-}
-
-pub(crate) fn get_id_field_from_model(model_struct: DataStruct) -> Field {
-    let fields = model_struct.fields;
-    match fields {
-        Fields::Named(fields) => {
-            let mut fields_by_name: HashMap<String, &Field> = HashMap::new();
-
-            for field in fields.named.iter() {
-                if let Some(ident) = field.ident.clone() {
-                    fields_by_name.insert(ident.to_string(), field);
-                }
-            }
-
-            let id_field = match fields_by_name.get("id") {
-                Some(field) => *field,
-                None => panic!("Struct does not have an id field."),
-            };
-            id_field.clone()
-        }
-        _ => panic!("Can't handle unnamed fields"),
-    }
-}
-
-/// Return all the field names for a struct.
-///
-/// Don't return `id`, as it's a required field and this list is used to
-/// construct queries which may mutate its value if we aren't careful.
-pub(crate) fn get_field_names(model_struct: DataStruct) -> Vec<String> {
-    let named_fields = match model_struct.fields {
-        Fields::Named(ref fields) => fields,
-        _ => panic!("Can't handle unnamed fields"),
-    };
-
-    let id_field_type = get_id_field_from_model(model_struct.clone()).ty.clone();
-    let mut field_names: Vec<String> = vec![];
-    for field in named_fields.named.iter() {
-        if let Some(ident) = field.ident.clone() {
-            let field_name = ident.to_string();
-            if ["created_at", "updated_at", "deleted_at"].contains(&field_name.as_str()) {
-                continue;
-            }
-            // Don't try to write ID fields if they're options.
-            if is_option(&id_field_type) && field_name == "id" {
-                continue;
-            }
-            field_names.push(field_name);
-        }
-    }
-
-    field_names
 }
 
 fn generate_constructor(ident: &syn::Ident, model_struct: &DataStruct) -> proc_macro2::TokenStream {

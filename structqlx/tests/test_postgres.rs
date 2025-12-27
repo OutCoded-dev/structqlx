@@ -57,6 +57,25 @@ mod bare_derive_macro {
         assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
     }
 
+    #[sqlx::test(fixtures("test_user_non_id_pk"))]
+    async fn model_may_specify_pk_field(pool: sqlx::PgPool) {
+        #[allow(dead_code)]
+        #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+        #[structqlx(engine = ::sqlx::Postgres, pk = "user_id")]
+        struct TestUser {
+            user_id: i32,
+            name: String,
+        }
+
+        let mut record = TestUser {
+            user_id: 1,
+            name: "Test".into(),
+        };
+        record.create(&pool).await.unwrap();
+
+        assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
+    }
+
     #[sqlx::test(fixtures("test_user_autoincrement_pg"))]
     fn model_may_have_optional_id(pool: sqlx::PgPool) {
         #[allow(dead_code)]
