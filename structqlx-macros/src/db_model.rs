@@ -77,6 +77,10 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             syn::Lit::Str(lit_str) => lit_str.value(),
             _ => "id".to_string(),
         },
+        syn::Expr::Path(expr_path) => match expr_path.path.get_ident() {
+            Some(ident) => ident.to_string(),
+            None => "id".to_string(),
+        },
         _ => "id".to_string(),
     };
 
@@ -92,7 +96,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let pk_type = &pk_field.ty;
     let pk_field_ident = &pk_field.ident.as_ref().unwrap(); // Safe, since we enforce named fields.
 
-    let create_method = generate_create_method(&opts.engine, &field_names);
+    let create_method = generate_create_method(&opts.engine, &field_names, pk_field);
     let update_method = generate_update_method(&opts.engine, &pk_field, &field_names);
     let save_method = generate_save_method(model_struct.clone(), &opts.engine, &pk_field);
 
@@ -222,7 +226,18 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 pub(crate) fn generate_create_method(
     db_engine: &syn::Path,
     field_names: &Vec<String>,
+    pk_field: &Field,
 ) -> proc_macro2::TokenStream {
+    let field_names = field_names
+        .iter()
+        .filter_map(|f| {
+            if is_option(&pk_field.ty) && *f == pk_field.ident.as_ref().unwrap().to_string() {
+                None
+            } else {
+                Some(f.clone())
+            }
+        })
+        .collect::<Vec<String>>();
     let field_names_clause = field_names.join(", ");
     let values_clause = field_names
         .iter()
