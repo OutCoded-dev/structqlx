@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS test_user (user_id INTEGER PRIMARY KEY, name TEXT);
