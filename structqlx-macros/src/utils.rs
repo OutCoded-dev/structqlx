@@ -26,6 +26,7 @@ pub(crate) fn is_option(type_: &syn::Type) -> bool {
 
 /// Walk the path of a given type. If it's an Option<*> field, return the inner
 /// type, otherwise return None.
+#[allow(unused)]
 pub(crate) fn get_field_type_from_option(type_: &syn::Type) -> Option<&syn::Type> {
     if !is_option(type_) {
         return None;
