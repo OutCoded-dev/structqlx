@@ -15,7 +15,8 @@ tasks:
           --env POSTGRES_PASSWORD \
           --detach \
           --name structqlx-test-pg \
-          postgres:18-alpine
+          postgres:18-alpine \
+          postgres -c log_statement=all -c log_destination=stderr
 
   test:
     desc: "Run all the tests for structqlx and structqlx-macros"
@@ -23,5 +24,5 @@ tasks:
       DATABASE_URL: postgres://structqlx:structqlx@127.0.0.1:25432/structqlx
     cmds:
       - task: test:setup
-      - defer: docker stop structqlx-test-pg
+      # - defer: docker stop structqlx-test-pg
       - cargo test

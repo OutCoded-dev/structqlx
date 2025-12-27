@@ -70,7 +70,7 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     /// Update the current record in the database.
     fn update(
         &mut self,
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
+        executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy,
     ) -> impl Future<Output = sqlx::Result<()>>;
 
     /// Create a new record in the database.

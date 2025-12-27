@@ -132,6 +132,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
+        user.create(&pool).await.unwrap();
 
         user.name = "Sharkey".into();
         let res = user.save(&pool).await;

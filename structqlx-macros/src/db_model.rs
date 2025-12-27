@@ -245,6 +245,10 @@ pub(crate) fn generate_update_method(
     db_engine: &syn::Path,
 ) -> proc_macro2::TokenStream {
     let field_names = get_field_names(model_struct.clone());
+    let field_names = field_names
+        .into_iter()
+        .filter(|fieldname| *fieldname != "id")
+        .collect::<Vec<String>>();
     let set_clause = field_names
         .iter()
         .enumerate()
@@ -252,7 +256,8 @@ pub(crate) fn generate_update_method(
         .collect::<Vec<String>>()
         .join(", ");
     let id_clause = format!("${}", field_names.len() + 1);
-    let query = format!("UPDATE {{table_name}} SET {set_clause} WHERE id = {id_clause};");
+    let query =
+        format!("UPDATE {{table_name}} SET {set_clause} WHERE id = {id_clause} RETURNING *;");
 
     let bind_exprs = field_names
         .iter()
@@ -264,21 +269,15 @@ pub(crate) fn generate_update_method(
         .collect::<Vec<syn::Expr>>();
     quote! {
         /// Update an existing record with the current data.
-        async fn update(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
+        async fn update(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
             let table_name = Self::table_name();
-            let query = format!(#query);
-            let mut query = sqlx::query_as::<#db_engine, Self>(&query);
-            #(#bind_exprs);*
-            ;
+            let query_sql = format!(#query);
+            let mut query = sqlx::query_as::<#db_engine, Self>(&query_sql);
+            #(#bind_exprs);*;
             query = query.bind(self.id.clone());
-            let result = query.fetch_one(executor).await;
-            match result {
-                Ok(result) => {
-                    let _ = std::mem::replace(self, result);
-                    Ok(())
-                },
-                Err(err) => Err(err),
-            }
+            let result = query.fetch_one(executor).await?;
+            let _ = std::mem::replace(self, result);
+            Ok(())
         }
     }
 }
@@ -293,7 +292,7 @@ pub(crate) fn generate_save_method(
             ///
             /// If the record has no ID, create a new record. Otherwise, update
             /// the existing one.
-            async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
+            async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
                 if self.id.is_none() {
                     self.create(executor).await.map(|_| ())
                 } else {
@@ -308,13 +307,12 @@ pub(crate) fn generate_save_method(
             /// If the record exists in the database, update it. Otherwise, create it.
             async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
                 use sqlx::Row;
-                let query = format!("SELECT 1 AS row_exists FROM {} WHERE id = $1;", Self::table_name());
-                let exists = sqlx::query::<#db_engine>(&query)
+                let query = format!("SELECT true AS row_exists FROM {} WHERE id = $1;", Self::table_name());
+                let result = sqlx::query::<#db_engine>(&query)
                     .bind(&self.id)
                     .fetch_one(executor)
-                    .await
-                    .is_ok();
-                if exists {
+                    .await;
+                if result.is_ok() {
                     self.update(executor).await.map(|_| ())
                 } else {
                     self.create(executor).await.map(|_| ())
@@ -346,11 +344,11 @@ pub(crate) fn generate_find_by_funcs(
     db_engine: &syn::Path,
     ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
-    let find_by_funcs = fields
+    fields
         .iter()
         .filter_map(|field| {
             let field_ident = field.ident.as_ref()?;
-            if field_ident.to_string() == "id" {
+            if *field_ident == "id" {
                 return None;
             }
 
@@ -358,7 +356,7 @@ pub(crate) fn generate_find_by_funcs(
             let func_ident = Ident::new(&format!("find_by_{}", field_ident), Span::call_site());
             let query = format!(
                 "SELECT * FROM {table_name} WHERE {field_name} = $1",
-                field_name = field_ident.to_string()
+                field_name = field_ident
             );
             let func = quote! {
                 async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Vec<Self>, sqlx::Error> {
@@ -371,8 +369,7 @@ pub(crate) fn generate_find_by_funcs(
             };
             Some(func)
         })
-        .collect();
-    find_by_funcs
+        .collect()
 }
 
 /// Generate a geetter function for each field on a model.

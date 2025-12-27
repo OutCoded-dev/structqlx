@@ -103,7 +103,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.save(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
@@ -116,7 +116,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.save(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
@@ -132,12 +132,13 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
+        user.save(&pool).await.unwrap();
+
+        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        assert_eq!(user_2, user);
 
         user.name = "Sharkey".into();
-        let res = user.save(&pool).await;
-        if let Err(err) = res {
-            panic!("Unexpected error from database on save(): {err:#?}");
-        };
+        user.update(&pool).await.unwrap();
 
         let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
         assert_eq!(user_2.name, "Sharkey");
@@ -191,7 +192,7 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.save(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
@@ -204,7 +205,7 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.save(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
@@ -220,6 +221,7 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
+        user.save(&pool).await.unwrap();
 
         user.name = "Sharkey".into();
         let res = user.save(&pool).await;
