@@ -8,7 +8,7 @@ use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
     Data, DataStruct, DeriveInput, Field, Fields, Ident, Token, Type, parse_macro_input,
-    punctuated::Punctuated,
+    parse_quote, punctuated::Punctuated,
 };
 
 #[derive(darling::FromAttributes, Debug)]
@@ -88,17 +88,15 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         panic!("Struct has no field {pk_field_name:?}")
     };
 
-    let field_names = fields_by_name
-        .keys()
-        .map(|k| k.clone())
-        .collect::<Vec<String>>();
+    let field_names = fields_by_name.keys().cloned().collect::<Vec<String>>();
 
     let pk_type = &pk_field.ty;
     let pk_field_ident = &pk_field.ident.as_ref().unwrap(); // Safe, since we enforce named fields.
 
     let create_method = generate_create_method(&opts.engine, &field_names, pk_field);
-    let update_method = generate_update_method(&opts.engine, &pk_field, &field_names);
-    let save_method = generate_save_method(model_struct.clone(), &opts.engine, &pk_field);
+    let update_method = generate_update_method(&opts.engine, pk_field, &field_names);
+    let save_method = generate_save_method(model_struct.clone(), &opts.engine, pk_field);
+    // let query_opts_struct = generate_query_options(&ident, &model_struct.fields);
 
     let constructor = if let Some(true) = opts.constructor {
         generate_constructor(&ident, &model_struct)
@@ -219,6 +217,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
             #find_by_funcs
         }
+
     }
     .into()
 }
@@ -282,7 +281,7 @@ pub(crate) fn generate_create_method(
 pub(crate) fn generate_update_method(
     db_engine: &syn::Path,
     pk_field: &Field,
-    field_names: &Vec<String>,
+    field_names: &[String],
 ) -> proc_macro2::TokenStream {
     let pk_field_ident = pk_field.ident.as_ref().unwrap();
     let pk_field_name = pk_field_ident.to_string();
@@ -421,6 +420,33 @@ pub(crate) fn generate_find_by_funcs(
             Some(func)
         })
         .collect()
+}
+
+/// Generate a query options struct.
+pub(crate) fn generate_query_options(ident: &Ident, fields: &Fields) -> proc_macro2::TokenStream {
+    let ident = Ident::from_string(&format!("{ident}QueryOptions")).unwrap();
+    let query_opts_fields = fields
+        .iter()
+        .map(|field| {
+            let ty: Type = if is_option(&field.ty) {
+                parse_quote!(#{field.ty})
+            } else {
+                parse_quote!(Option<#{field.ty}>)
+            };
+
+            let mut qo_field = field.clone();
+            qo_field.attrs.clear();
+            qo_field.ty = ty;
+
+            qo_field
+        })
+        .collect::<Vec<Field>>();
+
+    quote! {
+        pub struct #ident {
+            #(#query_opts_fields),*
+        }
+    }
 }
 
 /// Generate a geetter function for each field on a model.
