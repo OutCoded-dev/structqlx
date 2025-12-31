@@ -2,16 +2,16 @@ use std::collections::HashMap;
 
 use crate::utils::is_option;
 use convert_case::{Case, Casing};
-use darling::{FromAttributes, FromMeta};
+use darling::{FromAttributes, FromDeriveInput, FromField, FromMeta};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, Ident, Token, Type, parse_macro_input,
-    parse_quote, punctuated::Punctuated,
+    Attribute, Data, DataStruct, DeriveInput, Field, FieldMutability, Fields, Ident, Token, Type,
+    Visibility, parse_macro_input, parse_quote, punctuated::Punctuated, token::Colon,
 };
 
-#[derive(darling::FromAttributes, Debug)]
+#[derive(darling::FromDeriveInput, Debug)]
 #[darling(attributes(structqlx))]
 struct CrudModelOptions {
     table_name: Option<String>,
@@ -19,16 +19,25 @@ struct CrudModelOptions {
     schema: Option<String>,
     generate_getters: Option<bool>,
     constructor: Option<bool>,
-    #[darling(rename = "pk")]
-    primary_key_expr: Option<syn::Expr>,
     engine: syn::Path,
+}
+
+#[derive(darling::FromField, Debug)]
+#[darling(attributes(structqlx), forward_attrs)]
+pub(crate) struct CrudModelField {
+    ident: Option<Ident>,
+    #[allow(unused)]
+    vis: Visibility,
+    ty: Type,
+    attrs: Vec<Attribute>,
+    primary_key: Option<bool>,
 }
 
 pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let ident = input.ident.clone();
 
-    let opts = match CrudModelOptions::from_attributes(&input.attrs) {
+    let opts = match CrudModelOptions::from_derive_input(&input) {
         Ok(opts) => opts,
         Err(err) => return err.write_errors().into(),
     };
@@ -55,39 +64,27 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         _ => panic!("CrudModel can only be derived for structs."),
     };
 
-    let Fields::Named(fields) = &model_struct.fields else {
-        panic!("Cannot work with anonymous fields")
-    };
-    let mut fields_by_name: HashMap<String, &Field> = HashMap::new();
+    let mut fields_by_name: HashMap<String, CrudModelField> = HashMap::new();
 
-    for field in fields.named.iter() {
+    let mut pk_fields: Vec<String> = vec![];
+    for field in model_struct.fields.iter() {
         let Some(ident) = field.ident.clone() else {
             continue;
         };
+        let field = CrudModelField::from_field(field).unwrap();
+        if field.primary_key == Some(true) {
+            pk_fields.push(ident.to_string())
+        } else {
+            panic!("{field:?}");
+        }
         fields_by_name.insert(ident.to_string(), field);
     }
 
-    // ID related fields.
-    let primary_key_expr = opts
-        .primary_key_expr
-        .unwrap_or(syn::Expr::from_string("id").unwrap());
-
-    let pk_field_name = match primary_key_expr {
-        syn::Expr::Lit(expr) => match expr.lit {
-            syn::Lit::Str(lit_str) => lit_str.value(),
-            _ => "id".to_string(),
-        },
-        syn::Expr::Path(expr_path) => match expr_path.path.get_ident() {
-            Some(ident) => ident.to_string(),
-            None => "id".to_string(),
-        },
-        _ => "id".to_string(),
+    let Some(pk_field_name) = pk_fields.get(0) else {
+        panic!("Struct has no primary key field")
     };
 
-    let Some(pk_field) = fields_by_name.get(&pk_field_name) else {
-        panic!("Struct has no field {pk_field_name:?}")
-    };
-
+    let pk_field = fields_by_name.get(pk_field_name).unwrap();
     let field_names = fields_by_name.keys().cloned().collect::<Vec<String>>();
 
     let pk_type = &pk_field.ty;
@@ -225,7 +222,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 pub(crate) fn generate_create_method(
     db_engine: &syn::Path,
     field_names: &Vec<String>,
-    pk_field: &Field,
+    pk_field: &CrudModelField,
 ) -> proc_macro2::TokenStream {
     let field_names = field_names
         .iter()
@@ -280,7 +277,7 @@ pub(crate) fn generate_create_method(
 /// Build and return an update() method for a writeable struct.
 pub(crate) fn generate_update_method(
     db_engine: &syn::Path,
-    pk_field: &Field,
+    pk_field: &CrudModelField,
     field_names: &[String],
 ) -> proc_macro2::TokenStream {
     let pk_field_ident = pk_field.ident.as_ref().unwrap();
@@ -332,7 +329,7 @@ pub(crate) fn generate_update_method(
 pub(crate) fn generate_save_method(
     model_struct: DataStruct,
     db_engine: &syn::Path,
-    pk_field: &Field,
+    pk_field: &CrudModelField,
 ) -> proc_macro2::TokenStream {
     let pk_field_ident = pk_field.ident.as_ref().unwrap();
     if is_option(&pk_field.ty) {
