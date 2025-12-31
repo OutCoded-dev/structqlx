@@ -7,6 +7,7 @@ fn generate_getters_adds_getter_fns() {
     #[derive(Clone, DatabaseModel, Debug, FromRow)]
     #[structqlx(generate_getters, engine = ::sqlx::Postgres)]
     struct MyStruct {
+        #[structqlx(primary_key = true)]
         id: i32,
         foo: String,
     }
