@@ -27,6 +27,7 @@ fn constructor_constructs() {
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
     #[structqlx(constructor, engine = ::sqlx::Postgres)]
     struct MyStruct {
+        #[structqlx(primary_key = true)]
         id: i32,
         foo: String,
     }
@@ -45,6 +46,7 @@ mod bare_derive_macro {
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
         #[structqlx(engine = ::sqlx::Postgres)]
         struct TestUser {
+            #[structqlx(primary_key = true)]
             id: i32,
             name: String,
         }
@@ -62,8 +64,9 @@ mod bare_derive_macro {
     async fn model_may_specify_pk_field(pool: sqlx::PgPool) {
         #[allow(dead_code)]
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-        #[structqlx(engine = ::sqlx::Postgres, pk = "user_id")]
+        #[structqlx(engine = ::sqlx::Postgres)]
         struct TestUser {
+            #[structqlx(primary_key = true)]
             user_id: i32,
             name: String,
         }
@@ -83,6 +86,7 @@ mod bare_derive_macro {
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq, Default)]
         #[structqlx(engine = ::sqlx::Postgres)]
         struct TestUser {
+            #[structqlx(primary_key = true)]
             id: Option<i32>,
             name: String,
         }
@@ -101,6 +105,7 @@ mod bare_derive_macro {
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
     #[structqlx(engine = ::sqlx::Postgres)]
     struct TestUser {
+        #[structqlx(primary_key = true)]
         id: i32,
         name: String,
     }
@@ -185,6 +190,7 @@ mod with_named_table {
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
     #[structqlx(table_name = "a_different_table_name", engine = ::sqlx::Postgres)]
     struct TestUser {
+        #[structqlx(primary_key = true)]
         id: i32,
         name: String,
     }
