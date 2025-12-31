@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use crate::utils::is_option;
 use convert_case::{Case, Casing};
-use darling::{FromAttributes, FromDeriveInput, FromField, FromMeta};
+use darling::{FromAttributes, FromDeriveInput, FromMeta};
 use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
-    Attribute, Data, DataStruct, DeriveInput, Field, FieldMutability, Fields, Ident, Token, Type,
-    Visibility, parse_macro_input, parse_quote, punctuated::Punctuated, token::Colon,
+    Data, DataStruct, DeriveInput, Field, Fields, Ident, Token, Type, parse_macro_input,
+    parse_quote, punctuated::Punctuated,
 };
 
 #[derive(darling::FromDeriveInput, Debug)]
@@ -22,14 +22,9 @@ struct CrudModelOptions {
     engine: syn::Path,
 }
 
-#[derive(darling::FromField, Debug)]
+#[derive(darling::FromAttributes, Debug)]
 #[darling(attributes(structqlx), forward_attrs)]
-pub(crate) struct CrudModelField {
-    ident: Option<Ident>,
-    #[allow(unused)]
-    vis: Visibility,
-    ty: Type,
-    attrs: Vec<Attribute>,
+pub(crate) struct FieldAttributes {
     primary_key: Option<bool>,
 }
 
@@ -64,27 +59,26 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         _ => panic!("CrudModel can only be derived for structs."),
     };
 
-    let mut fields_by_name: HashMap<String, CrudModelField> = HashMap::new();
+    let mut fields_by_name: HashMap<String, &Field> = HashMap::new();
 
-    let mut pk_fields: Vec<String> = vec![];
+    let mut pk_fields: Vec<&Field> = vec![];
     for field in model_struct.fields.iter() {
         let Some(ident) = field.ident.clone() else {
             continue;
         };
-        let field = CrudModelField::from_field(field).unwrap();
-        if field.primary_key == Some(true) {
-            pk_fields.push(ident.to_string())
-        } else {
-            panic!("{field:?}");
+        let attrs = FieldAttributes::from_attributes(&field.attrs).unwrap();
+        if attrs.primary_key == Some(true) {
+            pk_fields.push(field);
         }
         fields_by_name.insert(ident.to_string(), field);
     }
 
-    let Some(pk_field_name) = pk_fields.get(0) else {
-        panic!("Struct has no primary key field")
-    };
+    if pk_fields.is_empty() {
+        panic!("Struct has no primary key field");
+    }
 
-    let pk_field = fields_by_name.get(pk_field_name).unwrap();
+    let pk_field = *pk_fields.first().unwrap();
+    let pk_field_name = pk_field.ident.as_ref().unwrap().to_string();
     let field_names = fields_by_name.keys().cloned().collect::<Vec<String>>();
 
     let pk_type = &pk_field.ty;
@@ -127,6 +121,8 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             ]
         }
     };
+
+    // let query_options_struct = generate_query_options(&ident, &model_struct.fields);
 
     quote! {
         impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
@@ -213,16 +209,18 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             #getters
 
             #find_by_funcs
+
         }
 
+        // #query_options_struct
     }
     .into()
 }
 
 pub(crate) fn generate_create_method(
     db_engine: &syn::Path,
-    field_names: &Vec<String>,
-    pk_field: &CrudModelField,
+    field_names: &[String],
+    pk_field: &Field,
 ) -> proc_macro2::TokenStream {
     let field_names = field_names
         .iter()
@@ -277,7 +275,7 @@ pub(crate) fn generate_create_method(
 /// Build and return an update() method for a writeable struct.
 pub(crate) fn generate_update_method(
     db_engine: &syn::Path,
-    pk_field: &CrudModelField,
+    pk_field: &Field,
     field_names: &[String],
 ) -> proc_macro2::TokenStream {
     let pk_field_ident = pk_field.ident.as_ref().unwrap();
@@ -327,9 +325,9 @@ pub(crate) fn generate_update_method(
 }
 
 pub(crate) fn generate_save_method(
-    model_struct: DataStruct,
+    _model_struct: DataStruct,
     db_engine: &syn::Path,
-    pk_field: &CrudModelField,
+    pk_field: &Field,
 ) -> proc_macro2::TokenStream {
     let pk_field_ident = pk_field.ident.as_ref().unwrap();
     if is_option(&pk_field.ty) {
@@ -421,7 +419,7 @@ pub(crate) fn generate_find_by_funcs(
 
 /// Generate a query options struct.
 pub(crate) fn generate_query_options(ident: &Ident, fields: &Fields) -> proc_macro2::TokenStream {
-    let ident = Ident::from_string(&format!("{ident}QueryOptions")).unwrap();
+    let query_opts_struct_ident = Ident::from_string(&format!("{ident}QueryOptions")).unwrap();
     let query_opts_fields = fields
         .iter()
         .map(|field| {
@@ -440,7 +438,7 @@ pub(crate) fn generate_query_options(ident: &Ident, fields: &Fields) -> proc_mac
         .collect::<Vec<Field>>();
 
     quote! {
-        pub struct #ident {
+        pub struct #query_opts_struct_ident {
             #(#query_opts_fields),*
         }
     }
