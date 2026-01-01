@@ -55,7 +55,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test".into(),
         };
-        record.create(&pool).await.unwrap();
+        record.insert(&pool).await.unwrap();
 
         assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
     }
@@ -75,7 +75,7 @@ mod bare_derive_macro {
             name: "Is this number got curves?".into(),
             ..Default::default()
         };
-        record.create(&pool).await.unwrap();
+        record.insert(&pool).await.unwrap();
 
         let records = TestUser::fetch_all(&pool).await.unwrap();
         assert_eq!(1, records.len());
@@ -108,7 +108,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
@@ -121,7 +121,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
@@ -137,7 +137,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        user.create(&pool).await.unwrap();
+        user.insert(&pool).await.unwrap();
 
         user.name = "Sharkey".into();
         let res = user.save(&pool).await;
@@ -198,7 +198,7 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
@@ -211,7 +211,7 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.create(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();

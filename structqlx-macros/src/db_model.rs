@@ -210,6 +210,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
         impl #ident {
             #constructor
+
             #getters
 
             #find_by_funcs
@@ -260,8 +261,8 @@ pub(crate) fn generate_create_method(
         .collect::<Vec<syn::Expr>>();
 
     quote! {
-        /// Create a new record from the current data.
-        async fn create(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Self> {
+        /// Insert a new record from the current data.
+        async fn insert(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Self> {
             let table_name = Self::table_name();
             let query = format!(#query);
             let mut query = sqlx::query_as::<#db_engine, Self>(&query);
@@ -336,13 +337,13 @@ pub(crate) fn generate_save_method(
     let pk_field_ident = pk_field.ident.as_ref().unwrap();
     if is_option(&pk_field.ty) {
         quote! {
-            /// Save t
+            /// Save the current record.
             ///
             /// If the record has no ID, create a new record. Otherwise, update
             /// the existing one.
             async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
                 if self.#pk_field_ident.is_none() {
-                    self.create(executor).await.map(|_| ())
+                    self.insert(executor).await.map(|_| ())
                 } else {
                     self.update(executor).await
                 }
@@ -364,7 +365,7 @@ pub(crate) fn generate_save_method(
                 if result.is_ok() {
                     self.update(executor).await.map(|_| ())
                 } else {
-                    self.create(executor).await.map(|_| ())
+                    self.insert(executor).await.map(|_| ())
                 }
             }
         }

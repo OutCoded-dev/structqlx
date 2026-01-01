@@ -73,8 +73,8 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
         executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy,
     ) -> impl Future<Output = sqlx::Result<()>>;
 
-    /// Create a new record in the database.
-    fn create(
+    /// Insert a new record in the database.
+    fn insert(
         &mut self,
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
     ) -> impl Future<Output = sqlx::Result<Self>>;
@@ -126,17 +126,4 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     fn delete_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
         Self::query_builder(QueryVerb::Delete)
     }
-}
-
-/// A trait to be implemented on models which relate to other models.
-pub trait HasRelated<'a, R, T>: DatabaseModel<'a, R>
-where
-    R: DatabaseModel<'a, T>,
-{
-    fn fetch_all_related(
-        &self,
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
-    ) -> impl Future<Output = sqlx::Result<Vec<R>>>;
-    // fn fetch_many_related(&self) -> impl Future<Output = sqlx::Result<Vec<R>>>;
-    // fn fetch_one_related(&self) -> impl Future<Output = sqlx::Result<R>>;
 }

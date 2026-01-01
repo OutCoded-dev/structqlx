@@ -73,7 +73,7 @@ mod bare_derive_macro {
             id: 1,
             name: "Test".into(),
         };
-        record.create(&pool).await.unwrap();
+        record.insert(&pool).await.unwrap();
 
         assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
     }
@@ -93,7 +93,7 @@ mod bare_derive_macro {
             user_id: 1,
             name: "Test".into(),
         };
-        record.create(&pool).await.unwrap();
+        record.insert(&pool).await.unwrap();
 
         assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
     }
@@ -113,7 +113,7 @@ mod bare_derive_macro {
             name: "Is this number got curves?".into(),
             ..Default::default()
         };
-        record.create(&pool).await.unwrap();
+        record.insert(&pool).await.unwrap();
 
         let records = TestUser::fetch_all(&pool).await.unwrap();
         assert_eq!(1, records.len());
