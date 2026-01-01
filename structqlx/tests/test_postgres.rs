@@ -37,6 +37,24 @@ fn constructor_constructs() {
     assert_eq!(val.foo, "Foo");
 }
 
+#[test]
+fn adds_query_options() {
+    #[allow(unused)]
+    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[structqlx(constructor, engine = ::sqlx::Postgres)]
+    struct MyStruct {
+        #[structqlx(primary_key = true)]
+        id: i32,
+        foo: String,
+    }
+
+    let query_options = MyStructQueryOptions {
+        id: Some(1),
+        ..Default::default()
+    };
+    assert_eq!(query_options.foo, None);
+}
+
 mod bare_derive_macro {
     use super::*;
 

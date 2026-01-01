@@ -87,7 +87,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let create_method = generate_create_method(&opts.engine, &field_names, pk_field);
     let update_method = generate_update_method(&opts.engine, pk_field, &field_names);
     let save_method = generate_save_method(model_struct.clone(), &opts.engine, pk_field);
-    // let query_opts_struct = generate_query_options(&ident, &model_struct.fields);
+    let query_opts_struct = generate_query_options(&ident, &model_struct.fields);
 
     let constructor = if let Some(true) = opts.constructor {
         generate_constructor(&ident, &model_struct)
@@ -212,7 +212,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
         }
 
-        // #query_options_struct
+        #query_opts_struct
     }
     .into()
 }
@@ -423,10 +423,11 @@ pub(crate) fn generate_query_options(ident: &Ident, fields: &Fields) -> proc_mac
     let query_opts_fields = fields
         .iter()
         .map(|field| {
-            let ty: Type = if is_option(&field.ty) {
-                parse_quote!(#{field.ty})
+            let ty = &field.ty;
+            let ty: Type = if is_option(ty) {
+                ty.clone()
             } else {
-                parse_quote!(Option<#{field.ty}>)
+                parse_quote!(Option<#ty>)
             };
 
             let mut qo_field = field.clone();
@@ -438,6 +439,7 @@ pub(crate) fn generate_query_options(ident: &Ident, fields: &Fields) -> proc_mac
         .collect::<Vec<Field>>();
 
     quote! {
+        #[derive(Clone, Debug, Default, PartialEq)]
         pub struct #query_opts_struct_ident {
             #(#query_opts_fields),*
         }
