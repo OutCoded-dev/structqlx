@@ -122,7 +122,11 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    // let query_options_struct = generate_query_options(&ident, &model_struct.fields);
+    let fetch_one_query = format!("SELECT * FROM {table_name} WHERE {pk_field_name} = $1");
+    let fetch_many_query: String = format!("SELECT * FROM {table_name} WHERE {pk_field_name} IN (");
+    let fetch_all_query: String = format!("SELECT * FROM {table_name}");
+    let delete_one_query = format!("DELETE FROM {table_name} WHERE {pk_field_name} = $1");
+    let delete_many_query: String = format!("DELETE FROM {table_name} WHERE {pk_field_name} IN (");
 
     quote! {
         impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
@@ -135,17 +139,17 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             #field_names_func
 
             /// Return a model by its id.
-            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, id: &#pk_type) -> sqlx::Result<#ident> {
-                let query = format!("SELECT * FROM {} WHERE {} = $1", Self::table_name(), #pk_field_name);
+            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, #pk_field_ident: &#pk_type) -> sqlx::Result<#ident> {
+                let query = #fetch_one_query;
                 sqlx::query_as::<#db_engine, #ident>(&query)
-                    .bind(id)
+                    .bind(#pk_field_ident)
                     .fetch_one(executor)
                     .await
             }
 
             /// Return one or more rows matching `ids`.
             async fn fetch_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<Vec<#ident>> {
-                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("SELECT * FROM {} WHERE id IN (", Self::table_name()));
+                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(#fetch_many_query);
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -158,7 +162,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
             /// Return all records in the table.
             async fn fetch_all(executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Vec<#ident>> {
-                let query = format!("SELECT * FROM {}", Self::table_name());
+                let query = #fetch_all_query;
                 sqlx::query_as::<#db_engine, #ident>(&query)
                     .fetch_all(executor)
                     .await
@@ -166,7 +170,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
             /// Delete one or more records from the table.
             async fn delete_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<()> {
-                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(format!("DELETE FROM {} WHERE {} IN (", Self::table_name(), #pk_field_name));
+                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(#delete_many_query);
                 let mut separated = builder.separated(", ");
                 for id in ids {
                     separated.push_bind(id);
@@ -179,7 +183,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
 
             /// Delete exactly one record -- the current one.
             async fn delete(&self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
-                let query = format!("DELETE FROM {} WHERE {} = $1", Self::table_name(), #pk_field_name);
+                let query = format!(#delete_one_query);
                 sqlx::query::<#db_engine>(&query)
                     .bind(&self.#pk_field_ident)
                     .execute(executor)
