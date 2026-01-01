@@ -125,11 +125,11 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     let field_names = field_names.join(", ");
     let fetch_one_query =
         format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} = $1");
-    let fetch_many_query: String =
+    let fetch_many_query =
         format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN (");
-    let fetch_all_query: String = format!("SELECT {field_names} FROM {table_name}");
+    let fetch_all_query = format!("SELECT {field_names} FROM {table_name}");
     let delete_one_query = format!("DELETE FROM {table_name} WHERE {pk_field_name} = $1");
-    let delete_many_query: String = format!("DELETE FROM {table_name} WHERE {pk_field_name} IN (");
+    let delete_many_query = format!("DELETE FROM {table_name} WHERE {pk_field_name} IN (");
 
     quote! {
         impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
