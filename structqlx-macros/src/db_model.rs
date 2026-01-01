@@ -113,7 +113,7 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    let field_names = fields_by_name.keys();
+    let field_names = fields_by_name.keys().cloned().collect::<Vec<String>>();
     let field_names_func = quote! {
         fn field_names() -> Vec<&'static str> {
             vec![
@@ -122,9 +122,12 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         }
     };
 
-    let fetch_one_query = format!("SELECT * FROM {table_name} WHERE {pk_field_name} = $1");
-    let fetch_many_query: String = format!("SELECT * FROM {table_name} WHERE {pk_field_name} IN (");
-    let fetch_all_query: String = format!("SELECT * FROM {table_name}");
+    let field_names = field_names.join(", ");
+    let fetch_one_query =
+        format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} = $1");
+    let fetch_many_query: String =
+        format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN (");
+    let fetch_all_query: String = format!("SELECT {field_names} FROM {table_name}");
     let delete_one_query = format!("DELETE FROM {table_name} WHERE {pk_field_name} = $1");
     let delete_many_query: String = format!("DELETE FROM {table_name} WHERE {pk_field_name} IN (");
 
@@ -230,7 +233,7 @@ pub(crate) fn generate_create_method(
     let field_names = field_names
         .iter()
         .filter_map(|f| {
-            if is_option(&pk_field.ty) && *f == pk_field.ident.as_ref().unwrap().to_string() {
+            if is_option(&pk_field.ty) && f == &pk_field.ident.as_ref().unwrap().to_string() {
                 None
             } else {
                 Some(f.clone())
