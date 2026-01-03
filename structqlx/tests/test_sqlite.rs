@@ -229,6 +229,7 @@ mod with_named_table {
         };
 
         user.name = "Sharkey".into();
+
         let res = user.save(&pool).await;
         if let Err(err) = res {
             panic!("Unexpected error from database on save(): {err:#?}");
