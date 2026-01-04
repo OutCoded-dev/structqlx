@@ -44,3 +44,27 @@ async fn push_bind_appends_to_query(_: sqlx::PgPool) {
     let query = id_field.push_bind(&mut qb).build();
     assert_eq!(query.sql(), "SELECT * FROM test_user WHERE id = $1")
 }
+
+#[test]
+fn bit_add_query_fields_makes_query_statement() {
+    let id_field: QueryField<'_, _, i32> = QueryField {
+        arg_offset: None,
+        field_name: "id".to_string(),
+        value: Some(1234),
+        op: structqlx::Comparison::Eq,
+        phantom: PhantomData::<&sqlx::Postgres>,
+    };
+    let name_field: QueryField<'_, _, String> = QueryField {
+        arg_offset: None,
+        field_name: "name".to_string(),
+        value: Some("%Debbie from Accounting%".to_string()),
+        op: structqlx::Comparison::Like,
+        phantom: PhantomData::<&sqlx::Postgres>,
+    };
+
+    let mut qb = QueryBuilder::new("SELECT * FROM test_user WHERE ");
+    let statement = id_field & name_field;
+    {
+        statement.push_bind(&mut qb);
+    }
+}

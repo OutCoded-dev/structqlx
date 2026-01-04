@@ -6,7 +6,7 @@ use std::{
     marker::PhantomData,
 };
 
-use sqlx::{Database, Encode, QueryBuilder};
+use sqlx::{Database, Encode, QueryBuilder, query::Query};
 pub use traits::*;
 
 #[cfg(feature = "macros")]
@@ -153,23 +153,31 @@ where
     }
 }
 
-// impl<'a, DB, T> std::ops::BitAnd for QueryField<'a, DB, T>
-// where
-//     DB: Database,
-//     T: Encode<'a, DB> + sqlx::Type<DB> + Display,
-// {
-//     type Output = QueryStatement<'a, DB>;
+impl<'a, 'b, DB, T, R> std::ops::BitAnd<QueryField<'b, DB, R>> for QueryField<'a, DB, T>
+where
+    DB: Database,
+    T: Encode<'a, DB> + sqlx::Type<DB> + Display,
+    R: Encode<'b, DB> + sqlx::Type<DB> + Display + 'a,
+    Self: 'a,
+    'a: 'b,
+    'b: 'a,
+{
+    type Output = QueryStatement<'a, DB>;
 
-//     fn bitand(self, rhs: Self) -> Self::Output {
-//         QueryStatement {
-//             subclauses: vec![Box::new(self), Box::new(rhs)],
-//             op: JoinOperator::And,
-//         }
-//     }
-// }
+    fn bitand(self, rhs: QueryField<'b, DB, R>) -> Self::Output {
+        let mut statement = QueryStatement {
+            subclauses: vec![],
+            op: JoinOperator::And,
+        };
+
+        statement.subclauses.push(Box::new(self));
+        statement.subclauses.push(Box::new(rhs));
+        statement
+    }
+}
 
 pub struct QueryStatement<'a, DB> {
-    pub subclauses: Vec<Box<dyn SqlClause<'a, DB>>>,
+    pub subclauses: Vec<Box<dyn SqlClause<'a, DB> + 'a>>,
     pub op: JoinOperator,
 }
 
@@ -187,11 +195,12 @@ where
     DB: Database,
 {
     fn to_sql(&self) -> String {
+        let join = format!(" {} ", self.op.to_sql());
         self.subclauses
             .iter()
             .map(|f| f.to_sql())
             .collect::<Vec<String>>()
-            .join(self.op.to_sql())
+            .join(&join)
     }
 
     fn push_bind(
