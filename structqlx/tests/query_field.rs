@@ -41,7 +41,7 @@ async fn push_bind_appends_to_query(_: sqlx::PgPool) {
     };
 
     let mut qb = QueryBuilder::new("SELECT * FROM test_user WHERE ");
-    let query = id_field.push_bind(&mut qb).build();
+    let query = id_field.push_to_builder(&mut qb).build();
     assert_eq!(query.sql(), "SELECT * FROM test_user WHERE id = $1")
 }
 
@@ -64,7 +64,9 @@ fn bit_add_query_fields_makes_query_statement() {
 
     let mut qb = QueryBuilder::new("SELECT * FROM test_user WHERE ");
     let statement = id_field & name_field;
-    {
-        statement.push_bind(&mut qb);
-    }
+    let query = statement.push_to_builder(&mut qb).build();
+    assert_eq!(
+        query.sql(),
+        "SELECT * FROM test_user WHERE (id = 1234 AND name LIKE '%Debbie from Accounting%')"
+    );
 }

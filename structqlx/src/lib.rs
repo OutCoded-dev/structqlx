@@ -9,6 +9,11 @@ use std::{
 use sqlx::{Database, Encode, QueryBuilder, query::Query};
 pub use traits::*;
 
+/// push_bind() a QueryStatement to a QueryBuilder.
+macro_rules! push_statement_to_builder {
+    ($statement:ident, $builder:ident) => {};
+}
+
 #[cfg(feature = "macros")]
 pub mod macros {
     pub use crate::traits::DatabaseModel;
@@ -69,9 +74,13 @@ impl JoinOperator {
     }
 }
 
-pub trait SqlClause<'a, DB>: Display
+pub trait Encodable<'a, DB: Database>: Encode<'a, DB> + sqlx::Type<DB> + Display {}
+
+pub trait SqlClause<'a, 'b, DB>: Display
 where
     DB: Database,
+    'b: 'a,
+    'a: 'b,
 {
     /// Return the query field as SQL, e.g.
     ///
@@ -92,8 +101,8 @@ where
     fn to_sql(&self) -> String;
 
     /// Push a bind parameter onto a querybuilder.
-    fn push_bind(
-        &'a self,
+    fn push_to_builder(
+        &'b self,
         query_builder: &'a mut QueryBuilder<'a, DB>,
     ) -> &'a mut QueryBuilder<'a, DB>;
 }
@@ -122,10 +131,12 @@ where
     }
 }
 
-impl<'a, DB, T> SqlClause<'a, DB> for QueryField<'a, DB, T>
+impl<'a, 'b, DB, T> SqlClause<'a, 'b, DB> for QueryField<'a, DB, T>
 where
     DB: Database,
     T: Encode<'a, DB> + sqlx::Type<DB> + Display,
+    'a: 'b,
+    'b: 'a,
 {
     fn to_sql(&self) -> String {
         format!(
@@ -136,8 +147,8 @@ where
         )
     }
 
-    fn push_bind(
-        &'a self,
+    fn push_to_builder(
+        &'b self,
         query_builder: &'a mut QueryBuilder<'a, DB>,
     ) -> &'a mut QueryBuilder<'a, DB> {
         let Some(value) = self.value.as_ref() else {
@@ -162,7 +173,7 @@ where
     'a: 'b,
     'b: 'a,
 {
-    type Output = QueryStatement<'a, DB>;
+    type Output = QueryStatement<'a, 'b, DB>;
 
     fn bitand(self, rhs: QueryField<'b, DB, R>) -> Self::Output {
         let mut statement = QueryStatement {
@@ -176,12 +187,12 @@ where
     }
 }
 
-pub struct QueryStatement<'a, DB> {
-    pub subclauses: Vec<Box<dyn SqlClause<'a, DB> + 'a>>,
+pub struct QueryStatement<'a, 'b, DB> {
+    pub subclauses: Vec<Box<dyn SqlClause<'a, 'b, DB> + 'a>>,
     pub op: JoinOperator,
 }
 
-impl<'a, DB> Display for QueryStatement<'a, DB>
+impl<'a, 'b, DB> Display for QueryStatement<'a, 'b, DB>
 where
     DB: Database,
 {
@@ -190,7 +201,7 @@ where
     }
 }
 
-impl<'a, DB> SqlClause<'a, DB> for QueryStatement<'a, DB>
+impl<'a, 'b, DB> QueryStatement<'a, 'b, DB>
 where
     DB: Database,
 {
@@ -203,14 +214,15 @@ where
             .join(&join)
     }
 
-    fn push_bind(
-        &'a self,
+    pub fn push_to_builder(
+        mut self,
         query_builder: &'a mut QueryBuilder<'a, DB>,
     ) -> &'a mut QueryBuilder<'a, DB> {
         let mut query_builder = query_builder;
         query_builder.push("(");
-        for subclause in self.subclauses.iter() {
-            query_builder = subclause.push_bind(query_builder);
+        let subclauses = self.subclauses.iter().clone();
+        for subclause in subclauses.iter() {
+            query_builder = subclause.push_to_builder(query_builder);
         }
 
         query_builder
