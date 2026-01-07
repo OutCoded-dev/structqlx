@@ -198,7 +198,22 @@ mod bare_derive_macro {
         let result = TestUser::find_by_name(&pool, "Test User".to_string())
             .await
             .unwrap();
-        assert_eq!(result, vec![user]);
+        assert_eq!(result, vec![user.clone()]);
+
+        let result = TestUser::find_one_by_name(&pool, "Test User".to_string())
+            .await
+            .unwrap();
+        assert_eq!(result, user);
+
+        let result = TestUser::find_optional_one_by_name(&pool, "Test User".to_string())
+            .await
+            .unwrap();
+        assert_eq!(result, Some(user));
+
+        let result = TestUser::find_optional_one_by_name(&pool, "Does not Exist".to_string())
+            .await
+            .unwrap();
+        assert_eq!(result, None);
     }
 }
 

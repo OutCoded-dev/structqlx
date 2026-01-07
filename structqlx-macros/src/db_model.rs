@@ -411,7 +411,7 @@ pub(crate) fn generate_find_by_funcs(
                 "SELECT * FROM {table_name} WHERE {field_name} = $1",
                 field_name = field_ident
             );
-            let func = quote! {
+            let find_func = quote! {
                 async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Vec<Self>, sqlx::Error> {
                     let query = #query;
                     sqlx::query_as::<#db_engine, #ident>(&query)
@@ -420,7 +420,35 @@ pub(crate) fn generate_find_by_funcs(
                         .await
                 }
             };
-            Some(func)
+
+            let func_ident = Ident::new(&format!("find_one_by_{}", field_ident), Span::call_site());
+            let find_one_func = quote! {
+                async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Self, sqlx::Error> {
+                    let query = #query;
+                    sqlx::query_as::<#db_engine, #ident>(&query)
+                        .bind(#field_ident)
+                        .fetch_one(executor)
+                        .await
+                }
+            };
+
+            let func_ident = Ident::new(&format!("find_optional_one_by_{}", field_ident), Span::call_site());
+            let find_one_optional_func = quote! {
+                async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Option<Self>, sqlx::Error> {
+                    let query = #query;
+                    sqlx::query_as::<#db_engine, #ident>(&query)
+                        .bind(#field_ident)
+                        .fetch_optional(executor)
+                        .await
+                }
+            };
+            Some(quote!{
+                #find_func
+
+                #find_one_func
+
+                #find_one_optional_func
+            })
         })
         .collect()
 }
