@@ -17,7 +17,7 @@ fn generate_getters_adds_getter_fns() {
         foo: "Bar".to_string(),
     };
 
-    assert_eq!(val.id(), &1);
+    assert_eq!(val.id(), 1);
     assert_eq!(val.foo(), "Bar");
 }
 
@@ -57,7 +57,7 @@ mod bare_derive_macro {
         };
         record.insert(&pool).await.unwrap();
 
-        assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
+        assert_eq!(TestUser::fetch_one(&pool, 1).await.unwrap(), record);
     }
 
     #[sqlx::test(fixtures("test_user"))]
@@ -97,7 +97,7 @@ mod bare_derive_macro {
             .await
             .unwrap();
 
-        let user = TestUser::fetch_one(&pool, &1).await.unwrap();
+        let user = TestUser::fetch_one(&pool, 1).await.unwrap();
         assert_eq!(user.id, 1);
         assert_eq!(user.name, "Test User");
     }
@@ -111,7 +111,7 @@ mod bare_derive_macro {
         let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one(&pool, user.id).await.unwrap();
         assert_eq!(user_2, user);
     }
 
@@ -125,7 +125,7 @@ mod bare_derive_macro {
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
-        match TestUser::fetch_one(&pool, &user.id).await {
+        match TestUser::fetch_one(&pool, user.id).await {
             Err(sqlx::Error::RowNotFound) => (),
             res => panic!("Unexpected result {res:#?}"),
         }
@@ -145,7 +145,7 @@ mod bare_derive_macro {
             panic!("Unexpected error from database on save(): {err:#?}");
         };
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one(&pool, user.id).await.unwrap();
         assert_eq!(user_2.name, "Sharkey");
     }
 
@@ -187,7 +187,7 @@ mod with_named_table {
             .await
             .unwrap();
 
-        let user = TestUser::fetch_one(&pool, &1).await.unwrap();
+        let user = TestUser::fetch_one(&pool, 1).await.unwrap();
         assert_eq!(user.id, 1);
         assert_eq!(user.name, "Test User");
     }
@@ -201,7 +201,7 @@ mod with_named_table {
         let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one(&pool, user.id).await.unwrap();
         assert_eq!(user_2, user);
     }
 
@@ -215,7 +215,7 @@ mod with_named_table {
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
-        match TestUser::fetch_one(&pool, &user.id).await {
+        match TestUser::fetch_one(&pool, user.id).await {
             Err(sqlx::Error::RowNotFound) => (),
             res => panic!("Unexpected result {res:#?}"),
         }
@@ -234,7 +234,7 @@ mod with_named_table {
             panic!("Unexpected error from database on save(): {err:#?}");
         };
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one(&pool, user.id).await.unwrap();
         assert_eq!(user_2.name, "Sharkey");
     }
 }

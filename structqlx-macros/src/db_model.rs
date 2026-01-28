@@ -8,7 +8,7 @@ use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
     Data, DataStruct, DeriveInput, Field, Fields, Ident, Token, Type, parse_macro_input,
-    parse_quote, punctuated::Punctuated,
+    parse_quote, punctuated::Punctuated, spanned::Spanned,
 };
 
 #[derive(darling::FromDeriveInput, Debug)]
@@ -17,6 +17,8 @@ struct CrudModelOptions {
     table_name: Option<String>,
     #[cfg(feature = "postgres")]
     schema: Option<String>,
+    #[cfg(feature = "postgres")]
+    pk_type_name: Option<String>,
     generate_getters: Option<bool>,
     constructor: Option<bool>,
     engine: syn::Path,
@@ -123,15 +125,64 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
     };
 
     let field_names = field_names.join(", ");
-    let fetch_one_query =
-        format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} = $1");
-    let fetch_many_query: String =
-        format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN (");
+
+    let pk = PrimaryKey {
+        struct_ident: &ident,
+        #[cfg(feature = "postgres")]
+        type_name: &opts.pk_type_name,
+        fields: pk_fields,
+    };
+
+    let pk_type = pk.type_ident();
+    let pk_struct = pk.as_struct(ident.to_string());
+    let pk_idents = pk.idents();
+    let pk_binds = pk_idents
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| {
+            quote! {.bind(pk.#idx)}
+        })
+        .collect::<Vec<_>>();
+    let pk_push_binds_plural = pk.push_binds_plural(
+        Ident::new("separated", Span::call_site()),
+        Ident::new("ids", Span::call_site()),
+    );
+    let pk_where_clause = pk.single_where_clause();
+    let pk_field_count = pk_idents.len();
+
+    let fetch_one_query = format!("SELECT {field_names} FROM {table_name} WHERE {pk_where_clause}");
+    let fetch_many_query_builder: proc_macro2::TokenStream = if pk_idents.len() == 1 {
+        let pk_field_name = pk_idents.first().unwrap().to_string();
+        let pk_push_binds_plural = pk.push_binds_plural(
+            Ident::new("separated", Span::call_site()),
+            Ident::new("ids", Span::call_site()),
+        );
+        quote! {
+            let query = format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN (");
+            let mut builder = sqlx::QueryBuilder::<#db_engine>::new(&query);
+            let mut separated = builder.separated(", ");
+            #pk_push_binds_plural
+            separated.push_unseparated(") ");
+        }
+    } else {
+        quote! {
+            let query = format!("SELECT {field_names} FROM {table_name} WHERE ");
+            let mut builder = sqlx::QueryBuilder::<#db_engine>::new(&query);
+            for id_row in ids {
+                builder.push("(")
+                let mut separated = builder.separated(", ");
+                builder.push(")")
+            }
+            separated.push_unseparated(") ");
+        }
+    };
+
     let fetch_all_query: String = format!("SELECT {field_names} FROM {table_name}");
     let delete_one_query = format!("DELETE FROM {table_name} WHERE {pk_field_name} = $1");
     let delete_many_query: String = format!("DELETE FROM {table_name} WHERE {pk_field_name} IN (");
-
     quote! {
+        #pk_struct
+
         impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
             type Database = #db_engine;
 
@@ -142,21 +193,18 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
             #field_names_func
 
             /// Return a model by its id.
-            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, #pk_field_ident: &#pk_type) -> sqlx::Result<#ident> {
+            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, pk: #pk_type) -> sqlx::Result<#ident> {
                 let query = #fetch_one_query;
                 sqlx::query_as::<#db_engine, #ident>(&query)
-                    .bind(#pk_field_ident)
+                    #(#pk_binds)*
                     .fetch_one(executor)
                     .await
             }
 
             /// Return one or more rows matching `ids`.
             async fn fetch_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<Vec<#ident>> {
-                let mut builder = sqlx::QueryBuilder::<#db_engine>::new(#fetch_many_query);
-                let mut separated = builder.separated(", ");
-                for id in ids {
-                    separated.push_bind(id);
-                }
+                #fetch_many_query_builder
+                #pk_push_binds_plural
                 separated.push_unseparated(") ");
 
                 let query = builder.build_query_as::<#ident>();
@@ -223,6 +271,123 @@ pub fn expand_db_model(input: TokenStream) -> TokenStream {
         #query_opts_struct
     }
     .into()
+}
+
+struct PrimaryKey<'a> {
+    struct_ident: &'a Ident,
+    #[cfg(feature = "postgres")]
+    type_name: Option<String>,
+    fields: Vec<&'a Field>,
+}
+
+impl PrimaryKey<'_> {
+    fn single_where_clause(&self) -> String {
+        let where_ = self
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(idx, field)| {
+                format!(
+                    "{field_name} = ${index}",
+                    field_name = field.ident.clone().unwrap().to_string(),
+                    index = idx + 1
+                )
+            })
+            .collect::<Vec<_>>();
+        where_.join(" AND ")
+    }
+
+    fn parameter(&self) -> proc_macro2::TokenStream {
+        let types = self
+            .fields
+            .iter()
+            .map(|field| field.ty.clone())
+            .collect::<Vec<_>>();
+        if types.len() == 1 {
+            let ty = types.first().unwrap();
+            quote! { #ty }
+        } else {
+            quote! {(#(#types),*)}
+        }
+    }
+
+    fn idents(&self) -> Vec<syn::Ident> {
+        self.fields
+            .iter()
+            .filter_map(|field| field.ident.clone())
+            .collect::<Vec<_>>()
+    }
+
+    fn push_binds_plural(
+        &self,
+        query_ident: syn::Ident,
+        pk_ident: syn::Ident,
+    ) -> proc_macro2::TokenStream {
+        if self.fields.len() == 1 {
+            return quote! {
+                for id in #pk_ident.iter() {
+                    #query_ident.push_bind(id);
+                }
+            };
+        }
+
+        let push_binds = self.fields.iter().enumerate().map(|(idx, _)| {
+            quote! {
+                #query_ident.push_bind(id_row.#idx);
+            }
+        });
+        quote! {
+            for id_row in #pk_ident.iter() {
+                #query_ident.push("(");
+                #(#push_binds)*
+                #query_ident.push(")");
+            }
+        }
+    }
+
+    /// Return the ident of the pk type.
+    fn type_ident(&self) -> Ident {
+        let struct_ident = self.struct_ident;
+        Ident::new(&format!("{struct_ident}PrimaryKey"), Span::call_site())
+    }
+
+    /// Return a struct to represent the primary key.
+    fn as_struct(&self, record_name: String) -> proc_macro2::TokenStream {
+        let ident = Ident::new(&format!("{record_name}PrimaryKey"), Span::call_site());
+        let fields: Vec<Field> = self
+            .fields
+            .iter()
+            .map(|field| {
+                let Field { ident, ty, .. } = field;
+                let field: Field = parse_quote!(pub #ident: #ty);
+                field
+            })
+            .collect();
+        quote! {
+            #[derive(sqlx::Type)]
+            pub struct #ident {
+                #(#fields),*
+            }
+        }
+    }
+}
+
+/// Return a tuple of:
+///
+/// - field ident(s)
+/// - field name (in the database)
+/// - field types
+pub(crate) fn pk_from_fields(fields: Vec<Field>) -> Vec<(syn::Ident, String, syn::Type)> {
+    fields
+        .iter()
+        .map(|field| {
+            (
+                field.ident.clone().unwrap(),
+                field.ident.clone().unwrap().to_string(),
+                field.ty.clone(),
+            )
+        })
+        .collect()
 }
 
 pub(crate) fn generate_create_method(

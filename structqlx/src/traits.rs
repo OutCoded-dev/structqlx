@@ -41,7 +41,7 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     /// Get a single row from the table.
     fn fetch_one(
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
-        id: &T,
+        id: T,
     ) -> impl Future<Output = sqlx::Result<Self>>;
 
     /// Get multiple rows from the table.
