@@ -6,9 +6,21 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
-    Field, Ident, ImplItemFn, ItemImpl, ItemStruct, Token, parse_macro_input, parse_quote,
+    Field, Ident, ImplItemFn, Item, ItemImpl, ItemStruct, Token, parse_macro_input, parse_quote,
     punctuated::Punctuated,
 };
+
+/// Return the argument placeholder for the engine.
+fn format_arg_placeholder(engine: &syn::Path, arg_index: usize) -> String {
+    let Some(last_segment) = engine.segments.last() else {
+        panic!("Invalid path for 'engine': {engine:?}");
+    };
+    if last_segment.ident == "Postgres" {
+        format!("${arg_index}")
+    } else {
+        "?".into()
+    }
+}
 
 #[derive(darling::FromDeriveInput, Debug, darling::FromAttributes)]
 #[darling(attributes(structqlx), forward_attrs)]
@@ -28,6 +40,8 @@ struct DatabaseModelOptions {
 pub(crate) struct FieldAttributes {
     #[darling(default)]
     primary_key: bool,
+    #[darling(default)]
+    set_on_insert: bool,
 }
 
 #[derive(Clone)]
@@ -237,13 +251,35 @@ impl<'a> DatabaseModelStruct<'a> {
             .map(|f| f.ident)
             .collect::<Punctuated<&Ident, Token![,]>>();
 
-        parse_quote!(
-            impl #ident {
+        let mut items: Vec<Item> = Vec::new();
+        if self.options.with_constructor {
+            items.push(parse_quote!(
                 pub fn new(#fields) -> Self {
                     Self {
                         #field_idents
                     }
                 }
+            ))
+        }
+
+        if self.options.with_getters {
+            for field in self.fields.iter() {
+                let DatabaseModelField {
+                    ident,
+                    field: Field { ty, .. },
+                    ..
+                } = field;
+                items.push(parse_quote!(
+                    pub fn #ident(&self) -> &#ty {
+                        &self.#ident
+                    }
+                ))
+            }
+        }
+
+        parse_quote!(
+            impl #ident {
+                #(#items)*
             }
         )
     }
@@ -261,40 +297,58 @@ impl<'a> DatabaseModelStruct<'a> {
         )
     }
 
-    fn impl_databasemodel_fetch_one_fn(&self) -> ImplItemFn {
+    fn impl_databasemodel_fetch_one_fns(&self) -> Vec<ImplItemFn> {
         let where_clause = self
             .pk_field_names
             .iter()
             .enumerate()
-            .map(|(idx, name)| format!("{name} = ${idx}", idx = idx + 1))
+            .map(|(idx, name)| {
+                format!(
+                    "{name} = {}",
+                    format_arg_placeholder(&self.options.engine, idx + 1)
+                )
+            })
             .collect::<Vec<String>>()
             .join(" AND ");
+
         let query = format!(
             "SELECT {field_names} FROM {table_name} WHERE {where_clause}",
             field_names = self.field_names.join(", "),
             table_name = self.table_name(),
         );
         let pk_field_type = &self.primary_key_field().ty;
-        parse_quote!(
-            async fn fetch_one<'e: 'a>(
-                executor: impl sqlx::Executor<'e, Database = Self::Database>,
-                id: &#pk_field_type,
-            ) -> sqlx::Result<Self> {
-                sqlx::query_as::<Self::Database, Self>(#query).bind(id).fetch_one(executor).await
-            }
-        )
+
+        vec![
+            parse_quote!(
+                async fn fetch_one_by_primary_key<'e: 'a>(
+                    executor: impl sqlx::Executor<'e, Database = Self::Database>,
+                    id: &#pk_field_type,
+                ) -> sqlx::Result<Self> {
+                    sqlx::query_as::<Self::Database, Self>(#query).bind(id).fetch_one(executor).await
+                }
+            ),
+            parse_quote!(
+                async fn fetch_optional_by_primary_key<'e: 'a>(
+                    executor: impl sqlx::Executor<'e, Database = Self::Database>,
+                    id: &#pk_field_type,
+                ) -> sqlx::Result<Option<Self>> {
+                    sqlx::query_as::<Self::Database, Self>(#query).bind(id).fetch_optional(executor).await
+                }
+            ),
+        ]
     }
 
     fn impl_databasemodel_fetch_many_fn(&self) -> ImplItemFn {
         let pk_field_name = self.primary_key_field().ident.to_string();
         let pk_field_type = &self.primary_key_field().ty;
         let query = format!(
-            "SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN UNNEST($1::text)",
+            "SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN UNNEST({placeholder}::text)",
             field_names = self.field_names.join(", "),
             table_name = self.table_name(),
+            placeholder = format_arg_placeholder(&self.options.engine, 1),
         );
         parse_quote!(
-            fn fetch<'e, 'c, E>(
+            fn fetch_by_primary_keys<'e, 'c, E>(
                 executor: E,
                 ids: &'c[#pk_field_type],
             ) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
@@ -327,17 +381,19 @@ impl<'a> DatabaseModelStruct<'a> {
     }
 
     fn impl_databasemodel_delete(&self) -> ImplItemFn {
+        let pk_field = self.primary_key_field().ident;
         let pk_field_name = self.primary_key_field().ident.to_string();
         let query = format!(
-            "DELETE FROM {table_name} WHERE {pk_field_name} = $1",
-            table_name = self.table_name()
+            "DELETE FROM {table_name} WHERE {pk_field_name} = {placeholder}",
+            table_name = self.table_name(),
+            placeholder = format_arg_placeholder(&self.options.engine, 1),
         );
         parse_quote!(
             async fn delete(
                 &self,
                 executor: impl sqlx::Executor<'a, Database = Self::Database>,
             ) -> sqlx::Result<()> {
-                sqlx::query(#query).execute(executor).await?;
+                sqlx::query(#query).bind(&self.#pk_field).execute(executor).await?;
                 Ok(())
             }
         )
@@ -347,18 +403,19 @@ impl<'a> DatabaseModelStruct<'a> {
         let pk_field_name = self.primary_key_field().ident.to_string();
         let pk_field_type = &self.primary_key_field().ty;
         let query = format!(
-            "DELETE FROM {table_name} WHERE {pk_field_name} IN UNNEST($1::text)",
-            table_name = self.table_name()
+            "DELETE FROM {table_name} WHERE {pk_field_name} IN UNNEST({placeholder}::text)",
+            table_name = self.table_name(),
+            placeholder = format_arg_placeholder(&self.options.engine, 1),
         );
         parse_quote!(
-            async fn delete_many(
+            async fn delete_by_primary_keys(
                 executor: impl sqlx::Executor<'a, Database = Self::Database>,
                 ids: &[#pk_field_type],
             ) -> sqlx::Result<()> {
                 sqlx::query(#query)
                     .bind(ids)
                     .execute(executor)
-                    .await;
+                    .await?;
                 Ok(())
             }
         )
@@ -371,7 +428,10 @@ impl<'a> DatabaseModelStruct<'a> {
             .iter()
             .map(|name| {
                 bind_index += 1;
-                format!("{name} = ${bind_index}")
+                format!(
+                    "{name} = {}",
+                    format_arg_placeholder(&self.options.engine, bind_index)
+                )
             })
             .collect::<Vec<String>>()
             .join(", ");
@@ -379,7 +439,12 @@ impl<'a> DatabaseModelStruct<'a> {
             .pk_field_names
             .iter()
             .enumerate()
-            .map(|(idx, name)| format!("{name} = ${idx}", idx = idx + bind_index))
+            .map(|(idx, name)| {
+                format!(
+                    "{name} = {}",
+                    format_arg_placeholder(&self.options.engine, idx + 1 + bind_index)
+                )
+            })
             .collect::<Vec<String>>()
             .join(" AND ");
         let bind_clauses: Vec<proc_macro2::TokenStream> = self
@@ -392,7 +457,7 @@ impl<'a> DatabaseModelStruct<'a> {
             })
             .collect();
         let query = format!(
-            "UPDATE {table_name} SET ({field_assignments}) WHERE {where_clause} RETURNING *",
+            "UPDATE {table_name} SET {field_assignments} WHERE {where_clause} RETURNING *",
             table_name = self.table_name()
         );
         parse_quote!(
@@ -414,17 +479,22 @@ impl<'a> DatabaseModelStruct<'a> {
         let mut field_names: Vec<String> = Vec::new();
         let mut field_binds: Vec<proc_macro2::TokenStream> = Vec::new();
         let mut field_params: Vec<String> = Vec::new();
-        for (i, field) in self.fields.iter().enumerate() {
+        for (i, field) in self
+            .fields
+            .iter()
+            .filter(|f| !f.attrs.set_on_insert)
+            .enumerate()
+        {
             let ident = field.ident;
             field_names.push(ident.to_string());
             field_binds.push(quote! { .bind(&self.#ident) });
-            field_params.push(format!("${}", i + 1));
+            field_params.push(format_arg_placeholder(&self.options.engine, i + 1));
         }
 
         let field_names = field_names.join(", ");
         let field_params = field_params.join(", ");
         let query = format!(
-            "INSERT INTO {table_name} ({field_names} VALUES ({field_params}) RETURNING *",
+            "INSERT INTO {table_name} ({field_names}) VALUES ({field_params}) RETURNING *",
             table_name = self.table_name()
         );
 
@@ -488,7 +558,7 @@ impl<'a> DatabaseModelStruct<'a> {
         let pk_field = self.primary_key_field();
         let pk_type = &pk_field.ty;
         let ident = &self.ident;
-        let fetch_one_impl = self.impl_databasemodel_fetch_one_fn();
+        let fetch_one_impls = self.impl_databasemodel_fetch_one_fns();
         let fetch_impl = self.impl_databasemodel_fetch_many_fn();
         let fetch_all_impl = self.impl_databasemodel_fetch_all_fn();
         let delete_impl = self.impl_databasemodel_delete();
@@ -502,7 +572,7 @@ impl<'a> DatabaseModelStruct<'a> {
             impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
                 type Database = #engine;
 
-                #fetch_one_impl
+                #(#fetch_one_impls)*
                 #fetch_impl
                 #fetch_all_impl
                 #delete_impl

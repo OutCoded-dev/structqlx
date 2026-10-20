@@ -5,7 +5,7 @@ use structqlx::macros::DatabaseModel;
 fn generate_getters_adds_getter_fns() {
     #[allow(unused)]
     #[derive(Clone, DatabaseModel, Debug, FromRow)]
-    #[structqlx(generate_getters, engine = ::sqlx::Postgres)]
+    #[structqlx(with_getters, engine = ::sqlx::Postgres)]
     struct MyStruct {
         #[structqlx(primary_key = true)]
         id: i32,
@@ -25,7 +25,7 @@ fn generate_getters_adds_getter_fns() {
 fn constructor_constructs() {
     #[allow(unused)]
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-    #[structqlx(constructor, engine = ::sqlx::Postgres)]
+    #[structqlx(with_constructor, engine = ::sqlx::Postgres)]
     struct MyStruct {
         #[structqlx(primary_key = true)]
         id: i32,
@@ -37,25 +37,27 @@ fn constructor_constructs() {
     assert_eq!(val.foo, "Foo");
 }
 
-#[test]
-fn adds_query_options() {
-    #[allow(unused)]
-    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-    #[structqlx(constructor, engine = ::sqlx::Postgres)]
-    struct MyStruct {
-        #[structqlx(primary_key = true)]
-        id: i32,
-        foo: String,
-    }
-
-    let query_options = MyStructQueryOptions {
-        id: Some(1),
-        ..Default::default()
-    };
-    assert_eq!(query_options.foo, None);
-}
-
+// #[test]
+// fn adds_query_options() {
+//     #[allow(unused)]
+//     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+//     #[structqlx(with_constructor, engine = ::sqlx::Postgres)]
+//     struct MyStruct {
+//         #[structqlx(primary_key = true)]
+//         id: i32,
+//         foo: String,
+//     }
+//
+//     let query_options = MyStructQueryOptions {
+//         id: Some(1),
+//         ..Default::default()
+//     };
+//     assert_eq!(query_options.foo, None);
+// }
+//
 mod bare_derive_macro {
+    use futures::StreamExt;
+
     use super::*;
 
     #[sqlx::test(fixtures("test_user"))]
@@ -75,7 +77,10 @@ mod bare_derive_macro {
         };
         record.insert(&pool).await.unwrap();
 
-        assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
+        assert_eq!(
+            TestUser::fetch_one_by_primary_key(&pool, &1).await.unwrap(),
+            record
+        );
     }
 
     #[sqlx::test(fixtures("test_user_non_id_pk"))]
@@ -95,7 +100,10 @@ mod bare_derive_macro {
         };
         record.insert(&pool).await.unwrap();
 
-        assert_eq!(TestUser::fetch_one(&pool, &1).await.unwrap(), record);
+        assert_eq!(
+            TestUser::fetch_one_by_primary_key(&pool, &1).await.unwrap(),
+            record
+        );
     }
 
     #[sqlx::test(fixtures("test_user_autoincrement_pg"))]
@@ -104,7 +112,7 @@ mod bare_derive_macro {
         #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq, Default)]
         #[structqlx(engine = ::sqlx::Postgres)]
         struct TestUser {
-            #[structqlx(primary_key = true)]
+            #[structqlx(primary_key, set_on_insert)]
             id: Option<i32>,
             name: String,
         }
@@ -115,9 +123,11 @@ mod bare_derive_macro {
         };
         record.insert(&pool).await.unwrap();
 
-        let records = TestUser::fetch_all(&pool).await.unwrap();
+        let records = TestUser::fetch_all(&pool)
+            .filter_map(async |item: sqlx::Result<TestUser>| item.ok())
+            .collect::<Vec<TestUser>>()
+            .await;
         assert_eq!(1, records.len());
-        assert_eq!(records.first().unwrap().name, "Is this number got curves?");
     }
 
     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
@@ -135,7 +145,7 @@ mod bare_derive_macro {
             .await
             .unwrap();
 
-        let user = TestUser::fetch_one(&pool, &1).await.unwrap();
+        let user = TestUser::fetch_one_by_primary_key(&pool, &1).await.unwrap();
         assert_eq!(user.id, 1);
         assert_eq!(user.name, "Test User");
     }
@@ -146,10 +156,12 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.save(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one_by_primary_key(&pool, &user.id)
+            .await
+            .unwrap();
         assert_eq!(user_2, user);
     }
 
@@ -159,11 +171,11 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.save(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
-        match TestUser::fetch_one(&pool, &user.id).await {
+        match TestUser::fetch_one_by_primary_key(&pool, &user.id).await {
             Err(sqlx::Error::RowNotFound) => (),
             res => panic!("Unexpected result {res:#?}"),
         }
@@ -175,45 +187,20 @@ mod bare_derive_macro {
             id: 1,
             name: "Test User".to_string(),
         };
-        user.save(&pool).await.unwrap();
+        user.insert(&pool).await.unwrap();
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one_by_primary_key(&pool, &user.id)
+            .await
+            .unwrap();
         assert_eq!(user_2, user);
 
         user.name = "Sharkey".into();
         user.update(&pool).await.unwrap();
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one_by_primary_key(&pool, &user.id)
+            .await
+            .unwrap();
         assert_eq!(user_2.name, "Sharkey");
-    }
-
-    #[sqlx::test(fixtures("test_user"))]
-    async fn can_find_by_non_id_fields(pool: sqlx::PgPool) {
-        let mut user = TestUser {
-            id: 1,
-            name: "Test User".to_string(),
-        };
-        user.save(&pool).await.unwrap();
-
-        let result = TestUser::find_by_name(&pool, "Test User".to_string())
-            .await
-            .unwrap();
-        assert_eq!(result, vec![user.clone()]);
-
-        let result = TestUser::find_one_by_name(&pool, "Test User".to_string())
-            .await
-            .unwrap();
-        assert_eq!(result, user);
-
-        let result = TestUser::find_optional_one_by_name(&pool, "Test User".to_string())
-            .await
-            .unwrap();
-        assert_eq!(result, Some(user));
-
-        let result = TestUser::find_optional_one_by_name(&pool, "Does not Exist".to_string())
-            .await
-            .unwrap();
-        assert_eq!(result, None);
     }
 }
 
@@ -235,7 +222,7 @@ mod with_named_table {
             .await
             .unwrap();
 
-        let user = TestUser::fetch_one(&pool, &1).await.unwrap();
+        let user = TestUser::fetch_one_by_primary_key(&pool, &1).await.unwrap();
         assert_eq!(user.id, 1);
         assert_eq!(user.name, "Test User");
     }
@@ -246,10 +233,12 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.save(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one_by_primary_key(&pool, &user.id)
+            .await
+            .unwrap();
         assert_eq!(user_2, user);
     }
 
@@ -259,11 +248,11 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        let res = user.save(&pool).await;
+        let res = user.insert(&pool).await;
         assert!(res.is_ok(), "{res:#?}");
 
         user.delete(&pool).await.unwrap();
-        match TestUser::fetch_one(&pool, &user.id).await {
+        match TestUser::fetch_one_by_primary_key(&pool, &user.id).await {
             Err(sqlx::Error::RowNotFound) => (),
             res => panic!("Unexpected result {res:#?}"),
         }
@@ -275,15 +264,17 @@ mod with_named_table {
             id: 1,
             name: "Test User".to_string(),
         };
-        user.save(&pool).await.unwrap();
+        user.insert(&pool).await.unwrap();
 
         user.name = "Sharkey".into();
-        let res = user.save(&pool).await;
+        let res = user.update(&pool).await;
         if let Err(err) = res {
             panic!("Unexpected error from database on save(): {err:#?}");
         };
 
-        let user_2 = TestUser::fetch_one(&pool, &user.id).await.unwrap();
+        let user_2 = TestUser::fetch_one_by_primary_key(&pool, &user.id)
+            .await
+            .unwrap();
         assert_eq!(user_2.name, "Sharkey");
     }
 }

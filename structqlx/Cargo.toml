@@ -22,11 +22,6 @@ name = "example-model"
 path = "examples/example_model.rs"
 test = false
 
-[[example]]
-name = "example-model-compiled"
-path = "examples/example_model_compiled.rs"
-test = false
-
 [features]
 default = ["macros", "sqlite"]
 macros = ["dep:structqlx-macros"]
@@ -34,9 +29,12 @@ sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
 
 [dependencies]
+futures = "0.3.32"
 futures-core = "0.3.32"
 sqlx = { version = "0.9.0", features = ["sqlite", "postgres"] }
 structqlx-macros = { version = "0.2.0-alpha.1", path = "../structqlx-macros", optional = true}
 
 [dev-dependencies]
+dotenvy = "0.15.7"
 sqlx = { version = "0.9.0", features = ["sqlite", "postgres", "runtime-tokio"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }

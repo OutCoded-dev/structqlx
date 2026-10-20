@@ -3,17 +3,26 @@
 use crate::QueryVerb;
 use sqlx::QueryBuilder;
 
-pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
-    type Database;
+pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug
+where
+    T: sqlx::Encode<'a, Self::Database>,
+{
+    type Database: sqlx::Database;
 
     /// Get a single row from the table.
-    fn fetch_one<'e: 'a>(
+    fn fetch_one_by_primary_key<'e: 'a>(
         executor: impl sqlx::Executor<'e, Database = Self::Database>,
         id: &T,
     ) -> impl Future<Output = sqlx::Result<Self>>;
 
+    /// Attempt to get a single row. Return None if the row doesn't exist.
+    fn fetch_optional_by_primary_key<'e: 'a>(
+        executor: impl sqlx::Executor<'e, Database = Self::Database>,
+        id: &T,
+    ) -> impl Future<Output = sqlx::Result<Option<Self>>>;
+
     /// Get multiple rows from the table.
-    fn fetch<'e, 'c, E>(
+    fn fetch_by_primary_keys<'e, 'c, E>(
         executor: E,
         id: &'c [T],
     ) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
@@ -38,7 +47,7 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     ) -> impl Future<Output = sqlx::Result<()>>;
 
     /// Delete multiple rows from the table.
-    fn delete_many(
+    fn delete_by_primary_keys(
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
         ids: &[T],
     ) -> impl Future<Output = sqlx::Result<()>>;
