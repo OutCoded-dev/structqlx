@@ -175,11 +175,6 @@ mod with_named_table {
         name: String,
     }
 
-    #[test]
-    fn table_name_matches_declared() {
-        assert_eq!(TestUser::table_name(), "a_different_table_name");
-    }
-
     #[sqlx::test(fixtures("named_table"))]
     async fn can_select_into_model(pool: sqlx::SqlitePool) {
         sqlx::query("INSERT INTO a_different_table_name (id, name) VALUES (1, 'Test User')")

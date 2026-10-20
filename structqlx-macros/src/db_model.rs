@@ -1,34 +1,38 @@
-use std::{collections::HashMap, ops::Deref};
+use std::ops::Deref;
 
-use crate::utils::is_option;
 use convert_case::{Case, Casing};
-use darling::{FromAttributes, FromDeriveInput, FromMeta};
+use darling::FromAttributes;
 use proc_macro::TokenStream;
-use proc_macro2::{Punct, Span};
+use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
-    Data, DataStruct, DeriveInput, Field, Fields, Ident, ItemImpl, ItemStruct, Token, Type,
-    parse_macro_input, parse_quote, punctuated::Punctuated,
+    Field, Ident, ImplItemFn, ItemImpl, ItemStruct, Token, parse_macro_input, parse_quote,
+    punctuated::Punctuated,
 };
 
 #[derive(darling::FromDeriveInput, Debug, darling::FromAttributes)]
-#[darling(attributes(structqlx))]
-struct CrudModelOptions {
+#[darling(attributes(structqlx), forward_attrs)]
+struct DatabaseModelOptions {
     table_name: Option<String>,
     #[cfg(feature = "postgres")]
     schema: Option<String>,
-    generate_getters: Option<bool>,
-    constructor: Option<bool>,
+    #[darling(default)]
+    with_getters: bool,
+    #[darling(default)]
+    with_constructor: bool,
     engine: syn::Path,
 }
 
-#[derive(darling::FromAttributes, Debug)]
+#[derive(Clone, darling::FromAttributes, Debug)]
 #[darling(attributes(structqlx), forward_attrs)]
 pub(crate) struct FieldAttributes {
-    primary_key: Option<bool>,
+    #[darling(default)]
+    primary_key: bool,
 }
 
+#[derive(Clone)]
 struct DatabaseModelField<'a> {
+    ident: &'a Ident,
     field: &'a Field,
     attrs: FieldAttributes,
 }
@@ -51,23 +55,35 @@ impl<'a> TryFrom<&'a Field> for DatabaseModelField<'a> {
     type Error = String;
 
     fn try_from(field: &'a Field) -> Result<Self, Self::Error> {
+        let Some(ident) = field.ident.as_ref() else {
+            return Err(format!(
+                "Field {field:?} has no ident; cannot operate on anonymous fields"
+            ));
+        };
         let attrs = FieldAttributes::from_attributes(&field.attrs)
             .map_err(|e| format!("Unable to parse field attributes: {e:?}"))?;
-        Ok(Self { field, attrs })
+        Ok(Self {
+            ident,
+            field,
+            attrs,
+        })
     }
 }
 
 pub(crate) struct DatabaseModelStruct<'a> {
     struct_: &'a ItemStruct,
     fields: Punctuated<DatabaseModelField<'a>, Token![,]>,
-    options: CrudModelOptions,
+    field_names: Vec<String>,
+    pk_fields: Vec<DatabaseModelField<'a>>,
+    pk_field_names: Vec<String>,
+    options: DatabaseModelOptions,
 }
 
 impl<'a> Deref for DatabaseModelStruct<'a> {
     type Target = ItemStruct;
 
     fn deref(&self) -> &Self::Target {
-        &self.struct_
+        self.struct_
     }
 }
 
@@ -75,16 +91,29 @@ impl<'a> TryFrom<&'a ItemStruct> for DatabaseModelStruct<'a> {
     type Error = String;
 
     fn try_from(struct_: &'a ItemStruct) -> Result<Self, Self::Error> {
-        let fields: Punctuated<DatabaseModelField, Token![,]> = struct_
-            .fields
-            .iter()
-            .map(DatabaseModelField::try_from)
-            .collect::<Result<Punctuated<DatabaseModelField, Token![,]>, String>>()?;
-        let options = CrudModelOptions::from_attributes(&struct_.attrs)
+        let mut fields: Punctuated<DatabaseModelField, Token![,]> = Punctuated::new();
+        let mut field_names: Vec<String> = vec![];
+        let mut pk_field_names: Vec<String> = vec![];
+        let mut pk_fields: Vec<DatabaseModelField> = vec![];
+
+        for field in struct_.fields.iter() {
+            let model_field = DatabaseModelField::try_from(field)?;
+            field_names.push(model_field.ident.to_string());
+            if model_field.attrs.primary_key {
+                pk_field_names.push(model_field.ident.to_string());
+                pk_fields.push(model_field.clone());
+            }
+            fields.push(model_field);
+        }
+
+        let options = DatabaseModelOptions::from_attributes(&struct_.attrs)
             .map_err(|e| format!("Unable to parse struct attributes {e:?}"))?;
         Ok(Self {
             struct_,
             fields,
+            field_names,
+            pk_fields,
+            pk_field_names,
             options,
         })
     }
@@ -100,6 +129,16 @@ impl<'a> DatabaseModelStruct<'a> {
             .to_case(Case::Snake)
     }
 
+    /// Return the PK field (singluar for now) for this DatabaseModel.
+    fn primary_key_field(&self) -> &'a DatabaseModelField<'_> {
+        if self.pk_fields.is_empty() {
+            panic!("No pk fields found for database model struct.");
+        };
+
+        // Only the one for now.
+        (self.pk_fields.first().unwrap()) as _
+    }
+
     /// Return a struct representing a new version of this struct, with an optional PK
     /// field.
     fn new_row_struct(&self) -> ItemStruct {
@@ -107,11 +146,14 @@ impl<'a> DatabaseModelStruct<'a> {
             .fields
             .iter()
             .map(|field| {
-                if let Some(true) = field.attrs.primary_key {
+                if field.attrs.primary_key {
                     let Field { ident, vis, ty, .. } = field.field;
                     return parse_quote!(#vis #ident: Option<#ty>);
                 }
-                field.field.clone()
+                // Strip any attrs from the field to avoid confusing errors.
+                let mut field = field.field.clone();
+                field.attrs.clear();
+                field
             })
             .collect::<Punctuated<Field, Token![,]>>();
 
@@ -133,38 +175,74 @@ impl<'a> DatabaseModelStruct<'a> {
     /// Return the new row struct impl, which allows the new row struct to be saved.
     fn new_row_struct_impl(&self) -> ItemImpl {
         let ItemStruct {
-            attrs,
-            vis,
-            struct_token,
+            attrs: _,
+            vis: _,
+            struct_token: _,
             ident,
-            generics,
-            fields,
-            semi_token,
+            generics: _,
+            fields: _,
+            semi_token: _,
         } = self.struct_;
 
-        let db_engine = &self.options.engine;
-        let doc = format!("Save a new {ident} to the database, and return the saved instance");
+        let _db_engine = &self.options.engine;
+        let _doc = format!("Save a new {ident} to the database, and return the saved instance");
         let new_type_ident = Ident::new(&format!("New{ident}"), Span::call_site());
         let query = self.insert_query();
+        let engine = &self.options.engine;
 
         let mut insert_query = quote! {
-            let query = sqlx::query_as::<Self::Database, #ident>(#query)
+            sqlx::query_as::<#engine, #ident>(
+                #query
+            )
         };
         for bind_call in self.fields.iter().map(|f| {
-            let ident = f.ident.as_ref();
+            let ident = f.ident;
             quote! {.bind(&self.#ident)}.to_token_stream()
         }) {
             insert_query.extend(bind_call);
         }
 
+        let engine = &self.options.engine;
         parse_quote!(
-            impl<'a> #new_type_ident<'a> {
-                type Database = #db_engine;
+            impl #new_type_ident {
+                pub async fn save<'a>(
+                    &self,
+                    executor: impl sqlx::Executor<'a, Database = #engine>
+                ) -> ::sqlx::Result<#ident> {
+                    #insert_query.fetch_one(executor).await
+                }
+            }
+        )
+    }
 
-                #[doc = #doc]
-                async fn save(self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<#ident> {
-                    #insert_query;
-                    query.execute(&executor).await?.fetch_one().await?
+    /// Return the impl for the struct.
+    fn struct_impl(&self) -> ItemImpl {
+        let ident = &self.ident;
+        let fields = self
+            .fields
+            .iter()
+            .map(|f| {
+                let DatabaseModelField {
+                    ident,
+                    field: Field { ty, .. },
+                    ..
+                } = f;
+                let field: Field = parse_quote!(#ident: #ty);
+                field
+            })
+            .collect::<Punctuated<Field, Token![,]>>();
+        let field_idents = self
+            .fields
+            .iter()
+            .map(|f| f.ident)
+            .collect::<Punctuated<&Ident, Token![,]>>();
+
+        parse_quote!(
+            impl #ident {
+                pub fn new(#fields) -> Self {
+                    Self {
+                        #field_idents
+                    }
                 }
             }
         )
@@ -172,26 +250,7 @@ impl<'a> DatabaseModelStruct<'a> {
 
     /// Return the INSERT query for this struct.
     fn insert_query(&self) -> String {
-        let mut pk_field_name: Option<String> = None;
-        let field_names = self
-            .fields
-            .iter()
-            .filter_map(|field| {
-                if let Some(true) = field.attrs.primary_key {
-                    pk_field_name = field.ident.as_ref().map(|i| i.to_string());
-                }
-                field.ident.as_ref().map(|f| f.to_string())
-            })
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        if pk_field_name.is_none() {
-            panic!(
-                "No primary key found for {} when generating INSERT query",
-                self.ident
-            );
-        }
-
+        let field_names = self.field_names.join(", ");
         format!(
             "INSERT INTO {table_name} ({field_names}) VALUES ({params}) RETURNING *",
             table_name = self.table_name(),
@@ -201,615 +260,273 @@ impl<'a> DatabaseModelStruct<'a> {
                 .join(", ")
         )
     }
-}
 
-pub fn expand_db_model(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
-    let ident = input.ident.clone();
-
-    let opts = match CrudModelOptions::from_derive_input(&input) {
-        Ok(opts) => opts,
-        Err(err) => return err.write_errors().into(),
-    };
-
-    let table_name = opts
-        .table_name
-        .unwrap_or(ident.to_string().to_case(Case::Snake));
-
-    let model_struct: DataStruct = match &input.data {
-        Data::Struct(model_struct) => model_struct.clone(),
-        _ => panic!("CrudModel can only be derived for structs."),
-    };
-
-    let mut fields_by_name: HashMap<String, &Field> = HashMap::new();
-
-    let mut pk_fields: Vec<&Field> = vec![];
-    for field in model_struct.fields.iter() {
-        let Some(ident) = field.ident.clone() else {
-            continue;
-        };
-        let attrs = FieldAttributes::from_attributes(&field.attrs).unwrap();
-        if attrs.primary_key == Some(true) {
-            pk_fields.push(field);
-        }
-        fields_by_name.insert(ident.to_string(), field);
-    }
-
-    if pk_fields.is_empty() {
-        panic!("Struct has no primary key field");
-    }
-
-    let pk_field = *pk_fields.first().unwrap();
-    let pk_field_name = pk_field.ident.as_ref().unwrap().to_string();
-    let field_names = fields_by_name.keys().cloned().collect::<Vec<String>>();
-
-    let pk_type = &pk_field.ty;
-    let pk_field_ident = &pk_field.ident.as_ref().unwrap(); // Safe, since we enforce named fields.
-
-    let update_method = generate_update_method(&opts.engine, pk_field, &field_names);
-    let save_method = generate_save_method(model_struct.clone(), &opts.engine, pk_field);
-    let query_opts_struct = generate_query_options(&ident, &model_struct.fields);
-
-    let constructor = if let Some(true) = opts.constructor {
-        generate_constructor(&ident, &model_struct)
-    } else {
-        quote! {}
-    };
-
-    let getters = if let Some(true) = opts.generate_getters {
-        generate_getters(&model_struct)
-    } else {
-        quote! {}
-    };
-
-    let db_engine = &opts.engine;
-
-    let find_by_funcs =
-        generate_find_by_funcs(&model_struct.fields, &table_name, db_engine, &ident);
-
-    let field_names = fields_by_name.keys().cloned().collect::<Vec<String>>();
-
-    let delete_query_base = format!("DELETE FROM {table_name}");
-    let select_query_base = format!("SELECT FROM {table_name}");
-    let update_query_base = format!("UPDATE {table_name}");
-    let insert_query_base = format!(
-        "INSERT INTO {table_name} ({field_names}) VALUES",
-        field_names = field_names.join(", ")
-    );
-
-    let query_builder_method: syn::ImplItemFn = parse_quote!(
-        /// Return a [sqlx::QueryBuilder] initialised with the correct SQL for the
-        /// passed QueryVerb.
-        fn query_builder<D: sqlx::Database>(
-            query_verb: structqlx::QueryVerb,
-        ) -> sqlx::QueryBuilder<D> {
-            let query = match query_verb {
-                structqlx::QueryVerb::Delete => #delete_query_base,
-                structqlx::QueryVerb::Select => #select_query_base,
-                structqlx::QueryVerb::Update => #update_query_base,
-                structqlx::QueryVerb::Insert => #insert_query_base,
-            };
-            sqlx::QueryBuilder::new(query)
-        }
-    );
-
-    let count_query = format!("SELECT COUNT(*) FROM {table_name}");
-    let count_method: syn::ImplItemFn = parse_quote!(
-        /// Return the count of rows in the table.
-        async fn count(
-            executor: impl sqlx::Executor<'a, Database = Self::Database>,
-        ) -> sqlx::Result<i64> {
-            use sqlx::Row;
-            let row = sqlx::query(#count_query).fetch_one(executor).await?;
-            row.try_get(0)
-        }
-    );
-
-    let create_query = format!(
-        "{insert_query_base} ({params}) RETURNING {pk_field_ident}",
-        params = (0..field_names.len())
-            .map(|i| format!("${}", i + 1))
+    fn impl_databasemodel_fetch_one_fn(&self) -> ImplItemFn {
+        let where_clause = self
+            .pk_field_names
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| format!("{name} = ${idx}", idx = idx + 1))
             .collect::<Vec<String>>()
-            .join(", ")
-    );
-    let mut create_query_stream = quote! {
-        let mut query = sqlx::query_as::<#db_engine, Self>(#create_query)
-    }
-    .to_token_stream();
-    for bind_stream in field_names.iter().map(|f| {
-        let ident = Ident::new(f, Span::call_site());
-        quote! {.bind(&self.#ident)}.to_token_stream()
-    }) {
-        create_query_stream.extend(bind_stream);
-    }
-
-    let insert_method: syn::ImplItem = parse_quote!(
-        /// Insert a new record from the current data.
-        async fn insert(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Self> {
-            #create_query_stream;
-            let result = query.fetch_one(executor).await;
-            if let Ok(ref result) = result {
-                let _ = std::mem::replace(self, result.clone());
-            }
-            result
-        }
-    );
-
-    let update_method: syn::ImplItem = {
+            .join(" AND ");
         let query = format!(
-            "{update_query_base} SET {set} WHERE {pk_field_ident} = ${pk_param}",
-            set = field_names
-                .iter()
-                .filter(|f| **f != pk_field_name)
-                .enumerate()
-                .map(|(i, f)| { format!("{f} = ${i}", i = i + 1) })
-                .fold(String::new(), |prev, new| format!("{prev}, {new}")),
-            pk_param = field_names.len() + 1
+            "SELECT {field_names} FROM {table_name} WHERE {where_clause}",
+            field_names = self.field_names.join(", "),
+            table_name = self.table_name(),
         );
-        let query: syn::Expr = parse_quote!(
-            sqlx::query_as::<#db_engine, #ident>(#query)
-        );
-        let mut query = query.to_token_stream();
-        for bind_stream in field_names.iter().filter_map(|f| {
-            let ident = Ident::new(f, Span::call_site());
-            // Don't include the pk field in the list of fields to set.
-            if ident == **pk_field_ident {
-                return None;
-            }
-            Some(quote! {.bind(&self.#ident)}.to_token_stream())
-        }) {
-            bind_stream.to_tokens(&mut query)
-        }
-        quote!(.bind(&self.#pk_field_ident)).to_tokens(&mut query);
-
+        let pk_field_type = &self.primary_key_field().ty;
         parse_quote!(
-            /// Update an existing record with the current data.
-            async fn update(
-                &mut self,
-                executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy,
-            ) -> sqlx::Result<()> {
-                #query;
+            async fn fetch_one<'e: 'a>(
+                executor: impl sqlx::Executor<'e, Database = Self::Database>,
+                id: &#pk_field_type,
+            ) -> sqlx::Result<Self> {
+                sqlx::query_as::<Self::Database, Self>(#query).bind(id).fetch_one(executor).await
             }
         )
-    };
+    }
 
-    let field_names = field_names.join(", ");
-    let fetch_one_query =
-        format!("SELECT {field_names} FROM {table_name} WHERE {pk_field_name} = $1");
-    let fetch_all_query: String = format!("SELECT {field_names} FROM {table_name}");
-    let delete_one_query = format!("DELETE FROM {table_name} WHERE {pk_field_name} = $1");
-
-    let impl_trait: ItemImpl = parse_quote!(
-        impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
-            type Database = #db_engine;
-
-            /// Return a model by its id.
-            async fn fetch_one(executor: impl sqlx::Executor<'a, Database = Self::Database>, #pk_field_ident: &#pk_type) -> sqlx::Result<#ident> {
-                sqlx::query_as::<#db_engine, #ident>(#fetch_one_query)
-                    .bind(#pk_field_ident)
-                    .fetch_one(executor)
-                    .await
+    fn impl_databasemodel_fetch_many_fn(&self) -> ImplItemFn {
+        let pk_field_name = self.primary_key_field().ident.to_string();
+        let pk_field_type = &self.primary_key_field().ty;
+        let query = format!(
+            "SELECT {field_names} FROM {table_name} WHERE {pk_field_name} IN UNNEST($1::text)",
+            field_names = self.field_names.join(", "),
+            table_name = self.table_name(),
+        );
+        parse_quote!(
+            fn fetch<'e, 'c, E>(
+                executor: E,
+                ids: &'c[#pk_field_type],
+            ) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
+            where
+                'c: 'e,
+                E: 'e + sqlx::Executor<'c, Database = Self::Database>,
+                Self::Database: 'e,
+                Self: 'e,
+            {
+                sqlx::query_as::<Self::Database, Self>(#query).bind(ids).fetch(executor)
             }
+        )
+    }
 
-            /// Return one or more rows matching `ids`.
-            async fn fetch_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<Vec<#ident>> {
-                let mut builder = Self::query_builder(structqlx::QueryVerb::Select);
-                let mut separated = builder.separated(", ");
-                for id in ids {
-                    separated.push_bind(id);
-                }
-                separated.push_unseparated(") ");
-
-                let query = builder.build_query_as::<Self>();
-                query.fetch_all(executor).await
+    fn impl_databasemodel_fetch_all_fn(&self) -> ImplItemFn {
+        let query = format!("SELECT * FROM {table_name}", table_name = self.table_name());
+        parse_quote!(
+            fn fetch_all<'e, 'c, E>(
+                executor: E,
+            ) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
+            where
+                'c: 'e,
+                E: 'e + sqlx::Executor<'c, Database = Self::Database>,
+                Self::Database: 'e,
+                Self: 'e,
+            {
+                sqlx::query_as::<Self::Database, Self>(#query).fetch(executor)
             }
+        )
+    }
 
-            /// Return all records in the table.
-            async fn fetch_all(executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<Vec<#ident>> {
-                let query = #fetch_all_query;
-                sqlx::query_as::<#db_engine, #ident>(&query)
-                    .fetch_all(executor)
-                    .await
-            }
-
-            /// Delete one or more records from the table.
-            async fn delete_many(executor: impl sqlx::Executor<'a, Database = Self::Database>, ids: &[#pk_type]) -> sqlx::Result<()> {
-                let mut builder = Self::query_builder(structqlx::QueryVerb::Delete).push("(");
-                let mut separated = builder.separated(", ");
-                for id in ids {
-                    separated.push_bind(id);
-                }
-                separated.push_unseparated(") ");
-
-                let query = builder.build();
-                query.execute(executor).await.map(|_| ())
-            }
-
-            /// Delete exactly one record -- the current one.
-            async fn delete(&self, executor: impl sqlx::Executor<'a, Database = Self::Database>) -> sqlx::Result<()> {
-                let query = format!(#delete_one_query);
-                sqlx::query::<#db_engine>(&query)
-                    .bind(&self.#pk_field_ident)
-                    .execute(executor)
-                    .await?;
+    fn impl_databasemodel_delete(&self) -> ImplItemFn {
+        let pk_field_name = self.primary_key_field().ident.to_string();
+        let query = format!(
+            "DELETE FROM {table_name} WHERE {pk_field_name} = $1",
+            table_name = self.table_name()
+        );
+        parse_quote!(
+            async fn delete(
+                &self,
+                executor: impl sqlx::Executor<'a, Database = Self::Database>,
+            ) -> sqlx::Result<()> {
+                sqlx::query(#query).execute(executor).await?;
                 Ok(())
             }
-
-            #count_method
-
-            #query_builder_method
-
-            #update_method
-
-            #save_method
-
-            #insert_method
-
-        }
-    );
-
-    let impl_type: syn::ItemImpl = parse_quote!(
-        impl #ident {
-            #constructor
-
-            #getters
-
-            #find_by_funcs
-        }
-    );
-
-    let mut token_stream = impl_trait.to_token_stream();
-    impl_type.to_tokens(&mut token_stream);
-    query_opts_struct.to_tokens(&mut token_stream);
-    token_stream.into()
-}
-
-/// Build and return an update() method for a writeable struct.
-pub(crate) fn generate_update_method(
-    db_engine: &syn::Path,
-    pk_field: &Field,
-    field_names: &[String],
-) -> proc_macro2::TokenStream {
-    let pk_field_ident = pk_field.ident.as_ref().unwrap();
-    let pk_field_name = pk_field_ident.to_string();
-    let field_names = field_names
-        .iter()
-        .filter_map(|fieldname| {
-            if *fieldname != pk_field_name {
-                Some(fieldname.clone())
-            } else {
-                None
-            }
-        })
-        .collect::<Vec<String>>();
-    let set_clause = field_names
-        .iter()
-        .enumerate()
-        .map(|(i, f)| format!("{} = ${}", f, i + 1))
-        .collect::<Vec<String>>()
-        .join(", ");
-    let id_clause = format!("${}", field_names.len() + 1);
-    let query = format!(
-        "UPDATE {{table_name}} SET {set_clause} WHERE {pk_field_name} = {id_clause} RETURNING *;",
-    );
-
-    let bind_exprs = field_names
-        .iter()
-        .map(|f| {
-            let assignment = format!("query = query.bind(self.{}.clone())", f);
-            syn::parse_str::<syn::Expr>(&assignment)
-                .unwrap_or_else(|_| panic!("Unable to parse assignment {}", assignment))
-        })
-        .collect::<Vec<syn::Expr>>();
-    quote! {
-        /// Update an existing record with the current data.
-        async fn update(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
-            let table_name = Self::table_name();
-            let query_sql = format!(#query);
-            let mut query = sqlx::query_as::<#db_engine, Self>(&query_sql);
-            #(#bind_exprs);*;
-            query = query.bind(self.#pk_field_ident.clone());
-            let result = query.fetch_one(executor).await?;
-            let _ = std::mem::replace(self, result);
-            Ok(())
-        }
+        )
     }
-}
 
-pub(crate) fn generate_save_method(
-    _model_struct: DataStruct,
-    db_engine: &syn::Path,
-    pk_field: &Field,
-) -> proc_macro2::TokenStream {
-    let pk_field_ident = pk_field.ident.as_ref().unwrap();
-    if is_option(&pk_field.ty) {
-        quote! {
-            /// Save the current record.
-            ///
-            /// If the record has no ID, create a new record. Otherwise, update
-            /// the existing one.
-            async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
-                if self.#pk_field_ident.is_none() {
-                    self.insert(executor).await.map(|_| ())
-                } else {
-                    self.update(executor).await
-                }
-            }
-        }
-    } else {
-        let pk_field_name = pk_field.ident.as_ref().unwrap().to_string();
-        quote! {
-            /// Save the record.
-            ///
-            /// If the record exists in the database, update it. Otherwise, create it.
-            async fn save(&mut self, executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy) -> sqlx::Result<()> {
-                use sqlx::Row;
-                let query = format!("SELECT true AS row_exists FROM {} WHERE {} = $1;", Self::table_name(), #pk_field_name);
-                let result = sqlx::query::<#db_engine>(&query)
-                    .bind(&self.#pk_field_ident)
-                    .fetch_one(executor)
+    fn impl_databasemodel_delete_many(&self) -> ImplItemFn {
+        let pk_field_name = self.primary_key_field().ident.to_string();
+        let pk_field_type = &self.primary_key_field().ty;
+        let query = format!(
+            "DELETE FROM {table_name} WHERE {pk_field_name} IN UNNEST($1::text)",
+            table_name = self.table_name()
+        );
+        parse_quote!(
+            async fn delete_many(
+                executor: impl sqlx::Executor<'a, Database = Self::Database>,
+                ids: &[#pk_field_type],
+            ) -> sqlx::Result<()> {
+                sqlx::query(#query)
+                    .bind(ids)
+                    .execute(executor)
                     .await;
-                if result.is_ok() {
-                    self.update(executor).await.map(|_| ())
-                } else {
-                    self.insert(executor).await.map(|_| ())
-                }
+                Ok(())
             }
-        }
+        )
     }
-}
 
-fn field_type_is_string(field_type: &Type) -> bool {
-    if let Type::Path(path) = field_type {
-        let Some(type_ident) =
-            path.path
-                .get_ident()
-                .or(path.path.segments.last().map(|seg| &seg.ident))
-        else {
-            return false;
-        };
-
-        return *type_ident == "String";
-    }
-    false
-}
-
-/// Generate find_by_<X> methods.
-pub(crate) fn generate_find_by_funcs(
-    fields: &Fields,
-    table_name: &str,
-    db_engine: &syn::Path,
-    ident: &syn::Ident,
-) -> proc_macro2::TokenStream {
-    fields
-        .iter()
-        .filter_map(|field| {
-            let field_ident = field.ident.as_ref()?;
-            if *field_ident == "id" {
-                return None;
-            }
-
-            let ty = &field.ty;
-            let func_ident = Ident::new(&format!("find_by_{}", field_ident), Span::call_site());
-            let query = format!(
-                "SELECT * FROM {table_name} WHERE {field_name} = $1",
-                field_name = field_ident
-            );
-            let find_func = quote! {
-                async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Vec<Self>, sqlx::Error> {
-                    let query = #query;
-                    sqlx::query_as::<#db_engine, #ident>(&query)
-                        .bind(#field_ident)
-                        .fetch_all(executor)
-                        .await
-                }
-            };
-
-            let func_ident = Ident::new(&format!("find_one_by_{}", field_ident), Span::call_site());
-            let find_one_func = quote! {
-                async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Self, sqlx::Error> {
-                    let query = #query;
-                    sqlx::query_as::<#db_engine, #ident>(&query)
-                        .bind(#field_ident)
-                        .fetch_one(executor)
-                        .await
-                }
-            };
-
-            let func_ident = Ident::new(&format!("find_optional_one_by_{}", field_ident), Span::call_site());
-            let find_one_optional_func = quote! {
-                async fn #func_ident<'a>(executor: impl sqlx::Executor<'a, Database = #db_engine>, #field_ident: #ty) -> Result<Option<Self>, sqlx::Error> {
-                    let query = #query;
-                    sqlx::query_as::<#db_engine, #ident>(&query)
-                        .bind(#field_ident)
-                        .fetch_optional(executor)
-                        .await
-                }
-            };
-            Some(quote!{
-                #find_func
-
-                #find_one_func
-
-                #find_one_optional_func
+    fn impl_databasemodel_update(&self) -> ImplItemFn {
+        let mut bind_index = 0;
+        let field_assignments = self
+            .field_names
+            .iter()
+            .map(|name| {
+                bind_index += 1;
+                format!("{name} = ${bind_index}")
             })
-        })
-        .collect()
-}
+            .collect::<Vec<String>>()
+            .join(", ");
+        let where_clause = self
+            .pk_field_names
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| format!("{name} = ${idx}", idx = idx + bind_index))
+            .collect::<Vec<String>>()
+            .join(" AND ");
+        let bind_clauses: Vec<proc_macro2::TokenStream> = self
+            .fields
+            .iter()
+            .chain(self.pk_fields.iter())
+            .map(|field| {
+                let ident = &field.ident;
+                quote! { .bind(&self.#ident) }
+            })
+            .collect();
+        let query = format!(
+            "UPDATE {table_name} SET ({field_assignments}) WHERE {where_clause} RETURNING *",
+            table_name = self.table_name()
+        );
+        parse_quote!(
+            async fn update(
+                &mut self,
+                executor: impl sqlx::Executor<'a, Database = Self::Database>,
+            ) -> sqlx::Result<()> {
+                let updated: Self = sqlx::query_as(#query)
+                #(#bind_clauses)*
+                .fetch_one(executor)
+                .await?;
+                let _ = std::mem::replace(self, updated);
+                Ok(())
+            }
+        )
+    }
 
-/// Generate a query options struct.
-pub(crate) fn generate_query_options(ident: &Ident, fields: &Fields) -> proc_macro2::TokenStream {
-    let query_opts_struct_ident = Ident::from_string(&format!("{ident}QueryOptions")).unwrap();
-    let query_opts_fields = fields
-        .iter()
-        .map(|field| {
-            let ty = &field.ty;
-            let ty: Type = if is_option(ty) {
-                ty.clone()
-            } else {
-                parse_quote!(Option<#ty>)
-            };
-
-            let mut qo_field = field.clone();
-            qo_field.attrs.clear();
-            qo_field.ty = ty;
-
-            qo_field
-        })
-        .collect::<Vec<Field>>();
-
-    quote! {
-        #[derive(Clone, Debug, Default, PartialEq)]
-        pub struct #query_opts_struct_ident {
-            #(#query_opts_fields),*
+    fn impl_databasemodel_insert(&self) -> ImplItemFn {
+        let mut field_names: Vec<String> = Vec::new();
+        let mut field_binds: Vec<proc_macro2::TokenStream> = Vec::new();
+        let mut field_params: Vec<String> = Vec::new();
+        for (i, field) in self.fields.iter().enumerate() {
+            let ident = field.ident;
+            field_names.push(ident.to_string());
+            field_binds.push(quote! { .bind(&self.#ident) });
+            field_params.push(format!("${}", i + 1));
         }
+
+        let field_names = field_names.join(", ");
+        let field_params = field_params.join(", ");
+        let query = format!(
+            "INSERT INTO {table_name} ({field_names} VALUES ({field_params}) RETURNING *",
+            table_name = self.table_name()
+        );
+
+        parse_quote!(
+            async fn insert(
+                &mut self,
+                executor: impl sqlx::Executor<'a, Database = Self::Database>,
+            ) -> sqlx::Result<()> {
+                let inserted: Self = sqlx::query_as::<Self::Database, Self>(
+                    #query
+                )
+                #(#field_binds)*
+                .fetch_one(executor)
+                .await?;
+                let _ = std::mem::replace(self, inserted);
+                Ok(())
+            }
+        )
+    }
+
+    fn databasemodel_impl_count(&self) -> ImplItemFn {
+        let query = format!(
+            "SELECT COUNT(1) AS row_count FROM {table_name}",
+            table_name = self.table_name()
+        );
+        parse_quote!(
+            async fn count(
+                executor: impl sqlx::Executor<'a, Database = Self::Database>,
+            ) -> sqlx::Result<i64> {
+                let (row_count,) = sqlx::query_as::<Self::Database, (i64,)>(#query).fetch_one(executor).await?;
+                Ok(row_count)
+            }
+        )
+    }
+
+    fn impl_databasemodel_query_builder(&self) -> ImplItemFn {
+        let table_name = self.table_name();
+        let delete_query_base = format!("DELETE FROM {table_name}");
+        let select_query_base = format!("SELECT FROM {table_name}");
+        let update_query_base = format!("UPDATE {table_name}");
+        let insert_query_base = format!("INSERT INTO {table_name}");
+
+        parse_quote!(
+            /// Return a [sqlx::QueryBuilder] initialised with the correct SQL for the
+            /// passed QueryVerb.
+            fn query_builder<D: sqlx::Database>(
+                query_verb: structqlx::QueryVerb,
+            ) -> sqlx::QueryBuilder<D> {
+                let query = match query_verb {
+                    structqlx::QueryVerb::Delete => #delete_query_base,
+                    structqlx::QueryVerb::Select => #select_query_base,
+                    structqlx::QueryVerb::Update => #update_query_base,
+                    structqlx::QueryVerb::Insert => #insert_query_base,
+                };
+                sqlx::QueryBuilder::new(query)
+            }
+        )
+    }
+
+    fn databasemodel_impl(&self) -> ItemImpl {
+        let pk_field = self.primary_key_field();
+        let pk_type = &pk_field.ty;
+        let ident = &self.ident;
+        let fetch_one_impl = self.impl_databasemodel_fetch_one_fn();
+        let fetch_impl = self.impl_databasemodel_fetch_many_fn();
+        let fetch_all_impl = self.impl_databasemodel_fetch_all_fn();
+        let delete_impl = self.impl_databasemodel_delete();
+        let delete_many = self.impl_databasemodel_delete_many();
+        let update_impl = self.impl_databasemodel_update();
+        let insert_impl = self.impl_databasemodel_insert();
+        let count_impl = self.databasemodel_impl_count();
+        let query_builder_impl = self.impl_databasemodel_query_builder();
+        let engine = &self.options.engine;
+        parse_quote!(
+            impl<'a> ::structqlx::traits::DatabaseModel<'a, #pk_type> for #ident {
+                type Database = #engine;
+
+                #fetch_one_impl
+                #fetch_impl
+                #fetch_all_impl
+                #delete_impl
+                #delete_many
+                #update_impl
+                #insert_impl
+                #count_impl
+                #query_builder_impl
+            }
+        )
     }
 }
 
-/// Generate a geetter function for each field on a model.
-pub(crate) fn generate_getters(model_struct: &DataStruct) -> proc_macro2::TokenStream {
-    let named_fields = match model_struct.fields {
-        Fields::Named(ref fields) => fields.clone(),
-        _ => panic!("Can't handle unnamed fields"),
-    };
-
-    let getters = named_fields
-        .named
-        .iter()
-        .map(|field| {
-            let field_name = field.ident.clone().unwrap();
-            let return_type = if field_type_is_string(&field.ty) {
-                quote! {&str}
-            } else {
-                let ty = field.ty.clone();
-                quote! {&#ty}
-            };
-            let comment =
-                format!("Return the current record's `{}`.", field_name).to_token_stream();
-            quote! {
-                #[doc = #comment]
-                pub fn #field_name(&self) -> #return_type {
-                    &self.#field_name
-                }
-            }
-        })
-        .collect::<Vec<proc_macro2::TokenStream>>();
-
-    quote! {
-        #(#getters)*
+impl<'a> ToTokens for DatabaseModelStruct<'a> {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        self.struct_impl().to_tokens(tokens);
+        self.new_row_struct().to_tokens(tokens);
+        self.new_row_struct_impl().to_tokens(tokens);
+        self.databasemodel_impl().to_tokens(tokens);
     }
 }
 
-fn generate_constructor(ident: &syn::Ident, model_struct: &DataStruct) -> proc_macro2::TokenStream {
-    let comment = format!("Create and return a new {} instance.", ident);
-    let Fields::Named(fields) = model_struct.fields.clone() else {
-        panic!("Cannot build a constructor from unnamed fields",);
-    };
-
-    let mut params: Punctuated<proc_macro2::TokenStream, Token![,]> = Punctuated::new();
-    let mut assignments: Punctuated<syn::Ident, Token![,]> = Punctuated::new();
-
-    for field in fields.named.iter() {
-        let ident = field.ident.as_ref().unwrap();
-        let ty = field.ty.clone();
-        params.push(quote! {#ident: #ty});
-        assignments.push(ident.clone());
-    }
-
-    quote! {
-        #[doc = #comment]
-        pub fn new(#params) -> Self {
-            Self {
-                #assignments
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use prettyplease::unparse;
-    use quote::ToTokens;
-    use syn::{File, ItemImpl};
-    use syn::{ItemStruct, parse_quote};
-
-    use crate::db_model::expand_db_model;
-
-    use crate::db_model::DatabaseModelStruct;
-
-    // #[test]
-    fn expand_db_model_expands() {
-        let struct_: ItemStruct = parse_quote!(
-            #[derive(Clone, Debug, DatabaseModel)]
-            struct MyStuct {
-                id: u32,
-                msg: String,
-            }
-        );
-
-        let _expanded = expand_db_model(struct_.to_token_stream().into());
-    }
-
-    #[test]
-    fn database_model_struct_new_row_struct() {
-        let struct_: ItemStruct = parse_quote!(
-            #[structqlx(engine = ::sqlx::Postgres)]
-            struct MyDatabaseModel {
-                #[structqlx(primary_key = true)]
-                id: u32,
-                name: String,
-            }
-        );
-
-        let model_struct_ = DatabaseModelStruct::try_from(&struct_).unwrap();
-        let new_row_struct = model_struct_.new_row_struct();
-        let actual: File = parse_quote!(
-            #new_row_struct
-        );
-        let expected: File = parse_quote!(
-            #[derive(Debug, Clone)]
-            struct NewMyDatabaseModel {
-                id: Option<u32>,
-                name: String,
-            }
-        );
-
-        assert_eq!(unparse(&expected), unparse(&actual))
-    }
-
-    #[test]
-    fn new_row_struct_impl() {
-        let struct_: ItemStruct = parse_quote!(
-            #[structqlx(engine = ::sqlx::Postgres)]
-            struct MyDatabaseModel {
-                #[structqlx(primary_key = true)]
-                id: u32,
-                name: String,
-            }
-        );
-
-        let model_struct_ = DatabaseModelStruct::try_from(&struct_).unwrap();
-        let expected: ItemImpl = parse_quote!(
-            impl<'a> NewMyDatabaseModel<'a> {
-                type Database = ::sqlx::Postgres;
-
-                ///Save a new MyDatabaseModel to the database, and return the saved instance
-                async fn save(
-                    self,
-                    executor: impl sqlx::Executor<'a, Database = Self::Database>,
-                ) -> sqlx::Result<MyDatabaseModel> {
-                    let query = sqlx::query_as::<Self::Database, MyDatabaseModel>(
-                        "INSERT INTO my_database_model (id, name) VALUES ($1, $2) RETURNING *",
-                    )
-                    .bind(&self.id)
-                    .bind(&self.name);
-                    query.execute(&executor).await?.fetch_one().await?
-                }
-            }
-        );
-        let actual = model_struct_.new_row_struct_impl();
-        let expected: File = parse_quote!(#expected);
-        let actual: File = parse_quote!(#actual);
-        assert_eq!(unparse(&expected), unparse(&actual));
-    }
+pub(crate) fn expand_db_model(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as ItemStruct);
+    let model_struct = DatabaseModelStruct::try_from(&input).unwrap();
+    model_struct.to_token_stream().into()
 }

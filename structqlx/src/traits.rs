@@ -7,21 +7,29 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     type Database;
 
     /// Get a single row from the table.
-    fn fetch_one(
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
+    fn fetch_one<'e: 'a>(
+        executor: impl sqlx::Executor<'e, Database = Self::Database>,
         id: &T,
     ) -> impl Future<Output = sqlx::Result<Self>>;
 
     /// Get multiple rows from the table.
-    fn fetch_many(
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
-        id: &[T],
-    ) -> impl Future<Output = sqlx::Result<Vec<Self>>>;
+    fn fetch<'e, 'c, E>(
+        executor: E,
+        id: &'c [T],
+    ) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
+    where
+        'c: 'e,
+        E: 'e + sqlx::Executor<'c, Database = Self::Database>,
+        Self::Database: 'e,
+        Self: 'e;
 
     /// Get all rows from the table.
-    fn fetch_all(
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
-    ) -> impl Future<Output = sqlx::Result<Vec<Self>>>;
+    fn fetch_all<'e, 'c, E>(executor: E) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
+    where
+        'c: 'e,
+        E: 'e + sqlx::Executor<'c, Database = Self::Database>,
+        Self::Database: 'e,
+        Self: 'e;
 
     /// Delete the row from the table.
     fn delete(
@@ -45,14 +53,6 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     fn insert(
         &mut self,
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
-    ) -> impl Future<Output = sqlx::Result<Self>>;
-
-    /// Save the current record in the database.
-    ///
-    /// If the record does not exist, create it. Otherwise, update it.
-    fn save(
-        &mut self,
-        executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy,
     ) -> impl Future<Output = sqlx::Result<()>>;
 
     /// Return the count of rows in the table.
