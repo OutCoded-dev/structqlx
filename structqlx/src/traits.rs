@@ -1,59 +1,44 @@
 //! Traits to be derived for structs which use structqlx.
 
+use crate::QueryVerb;
 use sqlx::QueryBuilder;
 
-/// Represents the different SQL verbs for the sake of building queries.
-pub enum QueryVerb {
-    Delete,
-    Insert,
-    Select,
-    Update,
-}
-
-impl From<QueryVerb> for String {
-    fn from(verb: QueryVerb) -> Self {
-        let verb = match verb {
-            QueryVerb::Delete => "DELETE",
-            QueryVerb::Insert => "INSERT",
-            QueryVerb::Select => "SELECT",
-            QueryVerb::Update => "UPDATE",
-        };
-        verb.into()
-    }
-}
-
-pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
-    type Database;
-
-    /// Return the table name for the model.
-    fn table_name() -> String;
-
-    /// Return the fields for the model.
-    fn field_names() -> Vec<&'static str>;
-
-    #[cfg(feature = "postgres")]
-    /// Return a schema for the model. Default is `public`.
-    #[inline]
-    fn schema() -> &'static str {
-        "public"
-    }
+pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug
+where
+    T: sqlx::Encode<'a, Self::Database>,
+{
+    type Database: sqlx::Database;
 
     /// Get a single row from the table.
-    fn fetch_one(
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
+    fn fetch_one_by_primary_key<'e: 'a>(
+        executor: impl sqlx::Executor<'e, Database = Self::Database>,
         id: &T,
     ) -> impl Future<Output = sqlx::Result<Self>>;
 
+    /// Attempt to get a single row. Return None if the row doesn't exist.
+    fn fetch_optional_by_primary_key<'e: 'a>(
+        executor: impl sqlx::Executor<'e, Database = Self::Database>,
+        id: &T,
+    ) -> impl Future<Output = sqlx::Result<Option<Self>>>;
+
     /// Get multiple rows from the table.
-    fn fetch_many(
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
-        id: &[T],
-    ) -> impl Future<Output = sqlx::Result<Vec<Self>>>;
+    fn fetch_by_primary_keys<'e, 'c, E>(
+        executor: E,
+        id: &'c [T],
+    ) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
+    where
+        'c: 'e,
+        E: 'e + sqlx::Executor<'c, Database = Self::Database>,
+        Self::Database: 'e,
+        Self: 'e;
 
     /// Get all rows from the table.
-    fn fetch_all(
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
-    ) -> impl Future<Output = sqlx::Result<Vec<Self>>>;
+    fn fetch_all<'e, 'c, E>(executor: E) -> futures_core::stream::BoxStream<'e, sqlx::Result<Self>>
+    where
+        'c: 'e,
+        E: 'e + sqlx::Executor<'c, Database = Self::Database>,
+        Self::Database: 'e,
+        Self: 'e;
 
     /// Delete the row from the table.
     fn delete(
@@ -62,7 +47,7 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     ) -> impl Future<Output = sqlx::Result<()>>;
 
     /// Delete multiple rows from the table.
-    fn delete_many(
+    fn delete_by_primary_keys(
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
         ids: &[T],
     ) -> impl Future<Output = sqlx::Result<()>>;
@@ -73,18 +58,10 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
         executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy,
     ) -> impl Future<Output = sqlx::Result<()>>;
 
-    /// Create a new record in the database.
-    fn create(
+    /// Insert a new record in the database.
+    fn insert(
         &mut self,
         executor: impl sqlx::Executor<'a, Database = Self::Database>,
-    ) -> impl Future<Output = sqlx::Result<Self>>;
-
-    /// Save the current record in the database.
-    ///
-    /// If the record does not exist, create it. Otherwise, update it.
-    fn save(
-        &mut self,
-        executor: impl sqlx::Executor<'a, Database = Self::Database> + Copy,
     ) -> impl Future<Output = sqlx::Result<()>>;
 
     /// Return the count of rows in the table.
@@ -93,50 +70,25 @@ pub trait DatabaseModel<'a, T>: Sized + Clone + std::fmt::Debug {
     ) -> impl Future<Output = sqlx::Result<i64>>;
 
     /// Return a QueryBuilder for this model based on the verb.
-    fn query_builder<'d, D: sqlx::Database>(query_verb: QueryVerb) -> QueryBuilder<'d, D> {
-        let query = match query_verb {
-            QueryVerb::Delete => format!("DELETE FROM {} WHERE", Self::table_name()),
-            QueryVerb::Select => format!("SELECT * FROM {} WHERE", Self::table_name()),
-            QueryVerb::Update => format!("UPDATE {}", Self::table_name()),
-            QueryVerb::Insert => format!(
-                "INSERT INTO {table} ({fields}) VALUES",
-                table = Self::table_name(),
-                fields = Self::field_names().join(", ")
-            ),
-        };
-        QueryBuilder::new(query)
-    }
+    fn query_builder<D: sqlx::Database>(query_verb: QueryVerb) -> QueryBuilder<D>;
 
     /// Return a QueryBuilder for SELECT.
-    fn select_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+    fn select_query<D: sqlx::Database>() -> QueryBuilder<D> {
         Self::query_builder(QueryVerb::Select)
     }
 
     /// Return a QueryBuilder for SELECT.
-    fn insert_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+    fn insert_query<D: sqlx::Database>() -> QueryBuilder<D> {
         Self::query_builder(QueryVerb::Insert)
     }
 
     /// Return a QueryBuilder for SELECT.
-    fn update_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+    fn update_query<D: sqlx::Database>() -> QueryBuilder<D> {
         Self::query_builder(QueryVerb::Update)
     }
 
     /// Return a QueryBuilder for SELECT.
-    fn delete_query<'d, D: sqlx::Database>() -> QueryBuilder<'d, D> {
+    fn delete_query<D: sqlx::Database>() -> QueryBuilder<D> {
         Self::query_builder(QueryVerb::Delete)
     }
-}
-
-/// A trait to be implemented on models which relate to other models.
-pub trait HasRelated<'a, R, T>: DatabaseModel<'a, R>
-where
-    R: DatabaseModel<'a, T>,
-{
-    fn fetch_all_related(
-        &self,
-        executor: impl sqlx::Executor<'a, Database = Self::Database>,
-    ) -> impl Future<Output = sqlx::Result<Vec<R>>>;
-    // fn fetch_many_related(&self) -> impl Future<Output = sqlx::Result<Vec<R>>>;
-    // fn fetch_one_related(&self) -> impl Future<Output = sqlx::Result<R>>;
 }

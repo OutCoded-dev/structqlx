@@ -2,11 +2,11 @@
 name = "structqlx"
 description = "A crate for adding generating simple db models on top of SQLX."
 author = "Graham Binns <graham@outcoded.dev>"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 edition = "2024"
 publish = true
 license = "MIT"
-repository = "https://gitlab.com/gmb/structqlx"
+repository = "https://github.com/OutCoded-dev/structqlx"
 
 [[test]]
 name = "test_sqlite"
@@ -16,6 +16,11 @@ requires_features = ["sqlite", "macros"]
 name = "test_postgres"
 requires_features = ["postgres", "macros", "sqlx/postgres"]
 
+[[example]]
+name = "example-model"
+path = "examples/example_model.rs"
+test = false
+
 [features]
 default = ["macros", "sqlite"]
 macros = ["dep:structqlx-macros"]
@@ -23,8 +28,12 @@ sqlite = ["sqlx/sqlite"]
 postgres = ["sqlx/postgres"]
 
 [dependencies]
-sqlx = { version = "0.8.6", features = ["sqlite", "postgres"] }
+futures = "0.3.32"
+futures-core = "0.3.32"
+sqlx = { version = "0.9.0", features = ["sqlite", "postgres"] }
 structqlx-macros = { version = "0.2.0-alpha.1", path = "../structqlx-macros", optional = true}
 
 [dev-dependencies]
-sqlx = { version = "0.8.6", features = ["sqlite", "postgres", "runtime-tokio"] }
+dotenvy = "0.15.7"
+sqlx = { version = "0.9.0", features = ["sqlite", "postgres", "runtime-tokio"] }
+tokio = { version = "1.54.0", features = ["macros", "rt-multi-thread"] }
