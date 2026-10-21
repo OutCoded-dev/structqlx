@@ -6,9 +6,14 @@ use proc_macro::TokenStream;
 use proc_macro2::Span;
 use quote::{ToTokens, quote};
 use syn::{
-    Field, Ident, ImplItemFn, Item, ItemImpl, ItemStruct, Token, parse_macro_input, parse_quote,
-    punctuated::Punctuated,
+    Field, Ident, ImplItemFn, Item, ItemImpl, ItemStruct, Token, TypePath, parse_macro_input,
+    parse_quote, punctuated::Punctuated,
 };
+
+const KNOWN_COPY_TYPES: [&str; 15] = [
+    "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "f8", "f16", "f32",
+    "f64", "f128",
+];
 
 /// Return the argument placeholder for the engine.
 fn format_arg_placeholder(engine: &syn::Path, arg_index: usize) -> String {
@@ -31,8 +36,12 @@ struct DatabaseModelOptions {
     #[darling(default)]
     with_getters: bool,
     #[darling(default)]
+    with_setters: bool,
+    #[darling(default)]
     with_constructor: bool,
     engine: syn::Path,
+    setter_prefix: Option<String>,
+    getter_prefix: Option<String>,
 }
 
 #[derive(Clone, darling::FromAttributes, Debug)]
@@ -229,6 +238,59 @@ impl<'a> DatabaseModelStruct<'a> {
         )
     }
 
+    /// If the setters and getters are set to be generated, do it here.
+    fn struct_impl_getters_and_setters(&self) -> Vec<Item> {
+        let setter_prefix = self.options.setter_prefix.clone().unwrap_or("set_".into());
+        let getter_prefix = self.options.getter_prefix.clone().unwrap_or("".into());
+
+        if setter_prefix == getter_prefix {
+            panic!("Setter prefix and getter prefix may not be the same.");
+        }
+
+        let mut output: Vec<Item> = Vec::new();
+        if !self.options.with_getters && !self.options.with_setters {
+            return output;
+        }
+        for field in self.fields.iter() {
+            let ident = &field.ident;
+            let getter_ident = Ident::new(&format!("{getter_prefix}{ident}"), Span::call_site());
+            let ty = &field.ty;
+            if self.options.with_getters {
+                let syn::Type::Path(TypePath { path, .. }) = ty else {
+                    panic!("Expected type {ty:?} to be a path.");
+                };
+                let Some(last) = path.segments.last() else {
+                    panic!("Could not parse type {path:?} for field {ident}");
+                };
+
+                if KNOWN_COPY_TYPES.contains(&last.ident.to_string().as_str()) {
+                    output.push(parse_quote!(
+                        pub fn #getter_ident(&self) -> #ty {
+                            self.#ident
+                        }
+                    ));
+                } else {
+                    output.push(parse_quote!(
+                        pub fn #getter_ident(&self) -> &#ty {
+                            &self.#ident
+                        }
+                    ));
+                }
+            }
+            if self.options.with_setters {
+                let setter_ident =
+                    Ident::new(&format!("{setter_prefix}{ident}"), Span::call_site());
+                output.push(parse_quote!(
+                    pub fn #setter_ident(&mut self, value: #ty) -> &mut Self {
+                        self.#ident = value;
+                        self
+                    }
+                ))
+            }
+        }
+        output
+    }
+
     /// Return the impl for the struct.
     fn struct_impl(&self) -> ItemImpl {
         let ident = &self.ident;
@@ -261,20 +323,8 @@ impl<'a> DatabaseModelStruct<'a> {
                 }
             ))
         }
-
-        if self.options.with_getters {
-            for field in self.fields.iter() {
-                let DatabaseModelField {
-                    ident,
-                    field: Field { ty, .. },
-                    ..
-                } = field;
-                items.push(parse_quote!(
-                    pub fn #ident(&self) -> &#ty {
-                        &self.#ident
-                    }
-                ))
-            }
+        if self.options.with_getters || self.options.with_setters {
+            items.extend_from_slice(&self.struct_impl_getters_and_setters());
         }
 
         parse_quote!(

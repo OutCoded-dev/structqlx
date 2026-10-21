@@ -3,7 +3,6 @@ name = "structqlx"
 description = "A crate for adding generating simple db models on top of SQLX."
 author = "Graham Binns <graham@outcoded.dev>"
 version = "0.2.0-alpha.1"
-rust-version = "1.94.0"
 edition = "2024"
 publish = true
 license = "MIT"

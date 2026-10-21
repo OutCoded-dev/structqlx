@@ -17,8 +17,28 @@ fn generate_getters_adds_getter_fns() {
         foo: "Bar".to_string(),
     };
 
-    assert_eq!(val.id(), &1);
+    assert_eq!(val.id(), 1);
     assert_eq!(val.foo(), "Bar");
+}
+
+#[test]
+fn with_setters_adds_setter_fns() {
+    #[allow(unused)]
+    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[structqlx(with_setters, engine = ::sqlx::Sqlite)]
+    struct MyStruct {
+        #[structqlx(primary_key = true)]
+        id: u8,
+        foo: String,
+    }
+
+    let mut val = MyStruct {
+        id: 1,
+        foo: "Bar".to_string(),
+    };
+
+    val.set_id(2);
+    assert_eq!(val.id, 2);
 }
 
 #[test]
@@ -38,7 +58,6 @@ fn constructor_constructs() {
 }
 
 mod bare_derive_macro {
-    
 
     use super::*;
 

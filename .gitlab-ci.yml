@@ -34,12 +34,16 @@ test:
     POSTGRES_PASSWORD: structqlx
     POSTGRES_HOST_AUTH_METHOD: trust
     DATABASE_URL: postgres://structqlx:structqlx@postgres:5432/structqlx
+  before_script:
+    - cargo install cargo-nextest
   script:
-    - cargo test
+    - cargo nextest run
 
 lint:
   stage: test
   image: rust
+  before_script:
+    - rustup component add rustfmt clippy
   script:
     - cargo clippy --all-targets --all-features
 

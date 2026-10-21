@@ -1,4 +1,5 @@
 use sqlx::prelude::FromRow;
+
 use structqlx::macros::DatabaseModel;
 
 #[test]
@@ -17,8 +18,67 @@ fn generate_getters_adds_getter_fns() {
         foo: "Bar".to_string(),
     };
 
-    assert_eq!(val.id(), &1);
+    assert_eq!(val.id(), 1);
     assert_eq!(val.foo(), "Bar");
+}
+
+#[test]
+fn with_setters_adds_setter_fns() {
+    #[allow(unused)]
+    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[structqlx(with_setters, engine = ::sqlx::Postgres)]
+    struct MyStruct {
+        #[structqlx(primary_key = true)]
+        id: i32,
+        foo: String,
+    }
+
+    let mut val = MyStruct {
+        id: 1,
+        foo: "Bar".to_string(),
+    };
+
+    val.set_id(2);
+    assert_eq!(val.id, 2);
+}
+
+#[test]
+fn getter_prefix_alters_getter_fn_name() {
+    #[allow(unused)]
+    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[structqlx(with_getters, getter_prefix = "get_", engine = ::sqlx::Postgres)]
+    struct MyStruct {
+        #[structqlx(primary_key = true)]
+        id: i32,
+        foo: String,
+    }
+
+    let val = MyStruct {
+        id: 1,
+        foo: "Bar".to_string(),
+    };
+
+    assert_eq!(1, val.get_id());
+}
+
+#[test]
+fn setter_prefix_alters_setter_fn_name() {
+    #[allow(unused)]
+    #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
+    #[structqlx(with_setters, setter_prefix = "with_", engine = ::sqlx::Postgres)]
+    struct MyStruct {
+        #[structqlx(primary_key = true)]
+        id: i32,
+        foo: String,
+    }
+
+    let mut val = MyStruct {
+        id: 1,
+        foo: "Bar".to_string(),
+    };
+
+    val.with_id(2);
+    assert_eq!(val.id, 2);
 }
 
 #[test]
@@ -37,24 +97,6 @@ fn constructor_constructs() {
     assert_eq!(val.foo, "Foo");
 }
 
-// #[test]
-// fn adds_query_options() {
-//     #[allow(unused)]
-//     #[derive(Clone, DatabaseModel, Debug, FromRow, PartialEq)]
-//     #[structqlx(with_constructor, engine = ::sqlx::Postgres)]
-//     struct MyStruct {
-//         #[structqlx(primary_key = true)]
-//         id: i32,
-//         foo: String,
-//     }
-//
-//     let query_options = MyStructQueryOptions {
-//         id: Some(1),
-//         ..Default::default()
-//     };
-//     assert_eq!(query_options.foo, None);
-// }
-//
 mod bare_derive_macro {
     use futures::StreamExt;
 
