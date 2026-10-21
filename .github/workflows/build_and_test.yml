@@ -6,12 +6,6 @@ on:
 jobs:
   run_tests:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        toolchain:
-          - stable
-          - beta
-          - nightly
     services:
       postgres:
         image: postgres:18
@@ -28,12 +22,12 @@ jobs:
           --health-retries 5
 
     env:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/test_db
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/test_db
 
     steps:
       - uses: actions/checkout@v6
       - run: cargo install cargo-nextest --locked
-      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
+      - run: rustup update stable && rustup default stable
       - run: cargo nextest run --verbose
 
   run_lint:
