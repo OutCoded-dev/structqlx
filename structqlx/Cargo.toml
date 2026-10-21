@@ -2,11 +2,11 @@
 name = "structqlx"
 description = "A crate for adding generating simple db models on top of SQLX."
 author = "Graham Binns <graham@outcoded.dev>"
-version = "0.2.0-alpha.1"
+version = "0.2.0-alpha.2"
 edition = "2024"
 publish = true
 license = "MIT"
-repository = "https://gitlab.com/gmb/structqlx"
+repository = "https://github.com/OutCoded-dev/structqlx"
 
 [[test]]
 name = "test_sqlite"
