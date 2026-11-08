@@ -453,7 +453,7 @@ impl<'a> DatabaseModelStruct<'a> {
         let pk_field_name = self.primary_key_field().ident.to_string();
         let pk_field_type = &self.primary_key_field().ty;
         let query = format!(
-            "DELETE FROM {table_name} WHERE {pk_field_name} IN UNNEST({placeholder}::text)",
+            "DELETE FROM {table_name} WHERE {pk_field_name} IN (SELECT UNNEST({placeholder}))",
             table_name = self.table_name(),
             placeholder = format_arg_placeholder(&self.options.engine, 1),
         );

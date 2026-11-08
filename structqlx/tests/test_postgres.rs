@@ -224,6 +224,24 @@ mod bare_derive_macro {
     }
 
     #[sqlx::test(fixtures("test_user"))]
+    async fn can_delete_rows_by_primary_key(pool: sqlx::PgPool) {
+        let mut user = TestUser {
+            id: 1,
+            name: "Test User".to_string(),
+        };
+        let res = user.insert(&pool).await;
+        assert!(res.is_ok(), "{res:#?}");
+
+        TestUser::delete_by_primary_keys(&pool, &[user.id])
+            .await
+            .unwrap();
+        match TestUser::fetch_one_by_primary_key(&pool, &user.id).await {
+            Err(sqlx::Error::RowNotFound) => (),
+            res => panic!("Unexpected result {res:#?}"),
+        }
+    }
+
+    #[sqlx::test(fixtures("test_user"))]
     async fn can_update_rows(pool: sqlx::PgPool) {
         let mut user = TestUser {
             id: 1,
