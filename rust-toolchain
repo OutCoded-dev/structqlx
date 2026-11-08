@@ -1,4 +1,0 @@
-[toolchain]
-# We build against 1.89.0 because darling is currently pinned thereto.
-channel = "1.90.0"
-components = [ "rustfmt", "clippy"   ]
